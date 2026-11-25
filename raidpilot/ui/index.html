@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RaidPilot</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="titlebar">
+  <div class="drag pywebview-drag-region">
+    <img src="logo.svg" alt="">
+    <span class="brand">RaidPilot</span>
+    <span id="version" class="muted"></span>
+  </div>
+  <button class="win" data-action="minimize" title="Minimieren" aria-label="Minimieren">&#8211;</button>
+  <button class="win close" data-action="close" title="Schließen" aria-label="Schließen">&#10005;</button>
+</header>
+
+<!-- Anmeldung -->
+<section id="view-auth" class="view auth" hidden>
+  <img class="hero-logo" src="logo.svg" alt="">
+  <h1 id="auth-title">Willkommen zurück</h1>
+  <p class="muted">Dein Profil bleibt nur auf diesem PC.</p>
+  <div class="segmented" id="auth-tabs">
+    <button type="button" data-auth="in" class="on">Anmelden</button>
+    <button type="button" data-auth="up">Registrieren</button>
+  </div>
+  <form id="auth-form" autocomplete="off">
+    <label class="field"><span>Name</span><input id="auth-name" maxlength="24" required></label>
+    <label class="field"><span>Passwort</span>
+      <input id="auth-pass" type="password" required>
+      <button type="button" class="peek" id="peek">zeigen</button>
+    </label>
+    <label class="check"><input type="checkbox" id="auth-remember" checked><i></i>Angemeldet bleiben</label>
+    <p class="error" id="auth-error" role="alert"></p>
+    <button class="primary" id="auth-submit">Los geht's</button>
+  </form>
+</section>
+
+<section id="view-loading" class="view loading">
+  <div class="orbit"><img src="logo.svg" alt=""></div>
+  <p class="muted">Wird geladen…</p>
+</section>
+
+<!-- Hauptbereich -->
+<main id="view-main" hidden>
+  <button id="update-banner" class="banner" hidden></button>
+
+  <section class="page" data-page="home">
+    <div class="flight card">
+      <button id="power" class="power" aria-label="Bot starten">
+        <svg viewBox="0 0 24 24" class="play"><path d="M8 5v14l11-7z"/></svg>
+        <svg viewBox="0 0 24 24" class="halt"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+      <div class="flight-text">
+        <strong id="power-label">Starten</strong>
+        <span id="status" class="muted">Bereit</span>
+      </div>
+    </div>
+    <p class="error" id="bot-error" role="alert"></p>
+
+    <h2>Diese Sitzung</h2>
+    <div class="tiles">
+      <div class="tile gold"><b id="s-gold">0</b><span>Gold</span></div>
+      <div class="tile elixir"><b id="s-elixir">0</b><span>Elixier</span></div>
+      <div class="tile dark"><b id="s-dark">0</b><span>Dunkles</span></div>
+      <div class="tile"><b id="s-attacks">0</b><span>Angriffe</span></div>
+      <div class="tile"><b id="s-walls">0</b><span>Mauern</span></div>
+      <div class="tile"><b id="s-runtime">0m</b><span>Laufzeit</span></div>
+    </div>
+
+    <h2>Einsatzplan</h2>
+    <div class="card stack">
+      <div class="segmented" data-segment="mode">
+        <button data-value="home">Heimatdorf</button>
+        <button data-value="builder">Bauarbeiterbasis <em>Beta</em></button>
+      </div>
+      <label class="row">Armee<select data-setting="army"></select></label>
+      <label class="row">Zauber<select data-setting="spell"></select></label>
+      <label class="slider"><span>Mindestbeute <output></output></span>
+        <input type="range" data-setting="min_loot" data-format="loot" min="0" max="3000000" step="10000"></label>
+      <label class="slider"><span>Lagergrenze <output></output></span>
+        <input type="range" data-setting="max_storage" data-format="loot" min="500000" max="35000000" step="100000"></label>
+    </div>
+  </section>
+
+  <section class="page" data-page="settings" hidden>
+    <h2>Emulator</h2>
+    <div class="card stack">
+      <label class="row">Gerät<select id="device"></select></label>
+      <div class="buttons">
+        <button class="ghost" id="refresh">Aktualisieren</button>
+        <button class="ghost" id="restart-adb">ADB neu starten</button>
+      </div>
+      <div class="row"><span class="grow">adb.exe<small id="adb-path">automatisch</small></span><button class="ghost small" id="pick-adb">Wählen</button></div>
+    </div>
+
+    <h2>Absetzen</h2>
+    <div class="card stack">
+      <label class="row">Angriffsseite<select data-setting="style"></select></label>
+      <label class="switch"><span>Helden automatisch einsetzen</span><input type="checkbox" data-setting="heroes"><i></i></label>
+      <label class="switch"><span>Belagerungsmaschine nutzen</span><input type="checkbox" data-setting="siege"><i></i></label>
+      <label class="switch"><span>Event-Truppen nutzen<small>Erst unter Einrichtung erfassen</small></span><input type="checkbox" data-setting="event_troops"><i></i></label>
+      <label class="slider"><span>Heldenfähigkeit nach <output></output></span>
+        <input type="range" data-setting="hero_ability_after" data-format="secoff" min="0" max="60" step="1"></label>
+      <label class="slider"><span>Zauber nach <output></output></span>
+        <input type="range" data-setting="spell_delay" data-format="sec" min="0" max="40" step="1"></label>
+      <label class="row"><span class="grow">Zaubersorten<small>Nur nötig ohne Helden</small></span><input type="number" data-setting="spell_slots" min="0" max="6"></label>
+    </div>
+
+    <h2>Farmen</h2>
+    <div class="card stack">
+      <label class="row">Beute zählt<select data-setting="loot_rule">
+        <option value="sum">Gold + Elixier zusammen</option>
+        <option value="each">Beide einzeln</option></select></label>
+      <label class="slider"><span>Kampf beenden ohne neue Beute <output></output></span>
+        <input type="range" data-setting="end_stale" data-format="secoff" min="0" max="90" step="5"></label>
+      <label class="switch"><span>Anhalten, wenn Lager voll</span><input type="checkbox" data-setting="stop_full"><i></i></label>
+      <label class="switch"><span>Mauern verbessern <em>Beta</em><small>Gibt nie Juwelen aus</small></span><input type="checkbox" data-setting="walls"><i></i></label>
+      <label class="switch"><span>Vor dem Angriff spenden <em>Beta</em></span><input type="checkbox" data-setting="donate"><i></i></label>
+      <label class="row"><span class="grow">Dörfer pro Suche höchstens</span><input type="number" data-setting="max_searches" min="5" max="500"></label>
+      <label class="row"><span class="grow">Angriffe pro Sitzung<small>0 = unbegrenzt</small></span><input type="number" data-setting="max_attacks" min="0" max="10000"></label>
+    </div>
+  </section>
+
+  <section class="page" data-page="setup" hidden>
+    <h2>Einrichtung</h2>
+    <ol class="steps card">
+      <li>Emulator auf <b>1280×720</b> stellen und ADB einschalten.</li>
+      <li>Spiel öffnen, bis dein Dorf zu sehen ist.</li>
+      <li>Werkzeug öffnen, Bild aufnehmen und <b>Erkennung testen</b>.</li>
+      <li>Wird ein Knopf nicht gefunden, einmal mit der Maus einrahmen.</li>
+    </ol>
+    <button class="primary" id="open-tool">Werkzeug öffnen</button>
+  </section>
+
+  <section class="page" data-page="profile" hidden>
+    <div class="profile">
+      <div class="avatar" id="avatar"></div>
+      <h1 id="p-name"></h1>
+      <span class="muted" id="p-since"></span>
+    </div>
+    <h2>Gesamt</h2>
+    <dl class="card totals">
+      <dt>Gold</dt><dd id="t-gold" class="gold"></dd>
+      <dt>Elixier</dt><dd id="t-elixir" class="elixir"></dd>
+      <dt>Dunkles Elixier</dt><dd id="t-dark" class="dark"></dd>
+      <dt>Angriffe</dt><dd id="t-attacks"></dd>
+      <dt>Mauern</dt><dd id="t-walls"></dd>
+      <dt>Laufzeit</dt><dd id="t-runtime"></dd>
+    </dl>
+    <h2>Discord-Meldungen</h2>
+    <div class="card stack">
+      <label class="field"><span>Webhook-Adresse</span><input type="password" data-setting="webhook" placeholder="https://discord.com/api/webhooks/…"></label>
+      <button class="ghost" id="test-webhook">Testmeldung senden</button>
+    </div>
+    <div class="buttons">
+      <button class="ghost" id="check-update">Nach Updates suchen</button>
+      <button class="ghost" id="open-folder">Datenordner</button>
+    </div>
+    <button class="ghost danger" id="sign-out">Abmelden</button>
+  </section>
+
+  <section class="page log-page" data-page="log" hidden>
+    <div class="card row">
+      <label class="switch grow"><span>Automatisch scrollen</span><input type="checkbox" id="autoscroll" checked><i></i></label>
+    </div>
+    <div class="row"><button class="ghost small" id="clear-log">Leeren</button><span class="muted" id="line-count">0 Zeilen</span></div>
+    <div id="log" class="log" aria-live="polite"></div>
+  </section>
+
+  <nav>
+    <button data-nav="home" class="on"><svg viewBox="0 0 24 24"><path d="M12 3 21 20l-9-4-9 4z"/></svg><span>Start</span></button>
+    <button data-nav="settings"><svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg><span>Optionen</span></button>
+    <button data-nav="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg><span>Einrichtung</span></button>
+    <button data-nav="profile"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.500 4-6.500 8-6.500s7 2 8 6.500"/></svg><span>Profil</span></button>
+    <button data-nav="log"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>Log</span></button>
+  </nav>
+</main>
+
+<!-- Einrichtungs-Werkzeug -->
+<section id="view-tool" class="view tool" hidden>
+  <div class="stage">
+    <div class="stage-bar">
+      <button class="primary small" id="capture">Bild aufnehmen</button>
+      <span id="tool-hint" class="muted">Noch kein Bild.</span>
+    </div>
+    <div class="canvas-wrap"><canvas id="canvas" width="1280" height="720"></canvas></div>
+  </div>
+  <aside>
+    <div class="segmented" id="tool-tabs">
+      <button data-tool="test" class="on">Testen</button>
+      <button data-tool="button">Knopf</button>
+      <button data-tool="troop">Truppe</button>
+      <button data-tool="sides">Seiten</button>
+      <button data-tool="slots">Plätze</button>
+    </div>
+    <div data-panel="test" class="stack">
+      <p>Prüft, was RaidPilot auf dem aufgenommenen Bild erkennt.</p>
+      <button class="primary" id="analyze">Erkennung testen</button>
+      <div id="result" class="result"></div>
+      <button class="ghost" id="diagnose">Diagnose speichern</button>
+    </div>
+    <div data-panel="button" class="stack" hidden>
+      <p>Knopf wählen, im Bild eng einrahmen, speichern.</p>
+      <label class="field"><span>Knopf</span><select id="button-name"></select></label>
+      <button class="primary" id="save-button">Rahmen speichern</button>
+      <div class="templates" data-kinds="button"></div>
+    </div>
+    <div data-panel="troop" class="stack" hidden>
+      <p>Truppen-Symbol in der Leiste einrahmen. Sind Truppen deiner Armee erfasst, setzt der Bot nur diese ein.</p>
+      <label class="field"><span>Art</span><select id="troop-kind">
+        <option value="troop">Normale Truppe</option><option value="event">Event-Truppe</option></select></label>
+      <label class="field"><span>Gehört zu</span><select id="troop-army"></select></label>
+      <button class="primary" id="save-troop">Rahmen speichern</button>
+      <div class="templates" data-kinds="troop event"></div>
+    </div>
+    <div data-panel="sides" class="stack" hidden>
+      <p>Seite wählen, dann im Bild den Anfang und das Ende der Absetz-Linie anklicken. Knapp außerhalb der roten Linie.</p>
+      <label class="field"><span>Seite</span><select id="side-name">
+        <option value="tl">Oben links</option><option value="tr">Oben rechts</option>
+        <option value="bl">Unten links</option><option value="br">Unten rechts</option></select></label>
+      <button class="ghost" id="reset-sides">Standard wiederherstellen</button>
+    </div>
+    <div data-panel="slots" class="stack" hidden>
+      <p>Normalerweise erkennt der Bot die Plätze selbst. Hier kannst du einzelne festlegen (von links gezählt).</p>
+      <div id="slot-roles" class="slot-grid"></div>
+    </div>
+    <p class="error" id="tool-error" role="alert"></p>
+    <button class="ghost" id="close-tool">Fertig</button>
+  </aside>
+</section>
+
+<div id="toast" role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>

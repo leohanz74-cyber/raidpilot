@@ -1,0 +1,65 @@
+# Jeder Push auf main wird getestet. Steht in raidpilot/version.py eine neue Nummer,
+# entsteht automatisch ein Release - die App bietet es dann als Update an.
+name: Test und Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q
+
+  release:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version pruefen
+        id: version
+        shell: bash
+        run: |
+          version=$(python -c "import runpy; print(runpy.run_path('raidpilot/version.py')['VERSION'])")
+          echo "number=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then echo "new=false" >> "$GITHUB_OUTPUT"; else echo "new=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-python@v5
+        if: steps.version.outputs.new == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: EXE bauen
+        if: steps.version.outputs.new == 'true'
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot/ui/icon.ico --add-data "raidpilot/ui;raidpilot/ui" --collect-all rapidocr --collect-all webview main.py
+      - name: Installer bauen
+        if: steps.version.outputs.new == 'true'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DVersion=${{ steps.version.outputs.number }}" installer\raidpilot.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/make_zip.py
+      - name: Veroeffentlichen
+        if: steps.version.outputs.new == 'true'
+        shell: bash
+        run: gh release create "v${{ steps.version.outputs.number }}" dist/*-Setup.exe dist/RaidPilot-source.zip --target "$GITHUB_SHA" --title "RaidPilot ${{ steps.version.outputs.number }}" --generate-notes
