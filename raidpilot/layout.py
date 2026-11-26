@@ -18,6 +18,26 @@ BUTTONS = {
     "confirm": ((0.25, 0.55, 0.95, 0.98), ("Confirm", "Okay", "Upgrade")),
     "donate": ((0.00, 0.08, 0.45, 0.92), ("Donate",)),
 }
+# Buttons that never move: only their text line is read, which is many times faster than searching
+SPOTS = {
+    "home_battle": (0.025, 0.924, 0.110, 0.985),
+    "home_build": (0.899, 0.924, 0.970, 0.983),
+    "next": (0.890, 0.655, 0.975, 0.720),
+    "end_battle": (0.019, 0.718, 0.128, 0.769),
+    "find_match": (0.076, 0.684, 0.233, 0.747),
+    "army_attack": (0.847, 0.858, 0.953, 0.918),
+}
+# Gold, elixir and dark elixir of the opponent
+LOOT_ROWS = (  # narrow enough to leave out the "2x" decorations to the right
+    (0.045, 0.1175, 0.147, 0.1635),
+    (0.045, 0.1730, 0.147, 0.2190),
+    (0.045, 0.2310, 0.147, 0.2780),
+)
+# Orange area of the Battle button: darker when a window lies on top of the village
+BATTLE_PATCH = (0.0125, 0.939, 0.031, 0.967)
+# Health bar above a hero card once the hero is on the field, and the dark frame over the bar
+HERO_BAR = (0.801, 0.812)
+HERO_FRAME = (0.794, 0.798)
 # These labels must match completely ("End Battle" is not "Battle")
 EXACT = ("home_battle", "home_build")
 
@@ -43,8 +63,8 @@ POINTS = {
 
 # Deployment lines just outside the red boundary when the map is zoomed out completely
 SIDES = {
-    "tl": ((0.135, 0.435), (0.375, 0.110)),
-    "tr": ((0.625, 0.110), (0.865, 0.435)),
+    "tl": ((0.135, 0.435), (0.400, 0.092)),
+    "tr": ((0.605, 0.092), (0.865, 0.435)),
     "bl": ((0.135, 0.545), (0.300, 0.765)),
     "br": ((0.865, 0.540), (0.690, 0.775)),
 }

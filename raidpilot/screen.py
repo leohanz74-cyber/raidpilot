@@ -54,7 +54,7 @@ def join_lines(words: list) -> list:
 def parse_number(text: str):
     """'1 234 567' -> 1234567. None if the line is not a number."""
     compact = re.sub(r"[\s.,'’+]", "", text)
-    if not compact:
+    if not compact or "x" in compact.lower() or "×" in compact:  # "2x" markers, "x12" counters
         return None
     digits = sum(c.isdigit() for c in compact)
     if digits == 0 or digits < len(compact) * 0.5:
@@ -101,17 +101,37 @@ class Screen:
                             return (int(x), int(y))
         return None
 
-    def button(self, name: str):
-        """Centre of a button or None."""
-        region, labels = layout.BUTTONS[name]
-        return self.find_text(labels, region, name in layout.EXACT)
+    def line(self, region, min_score: float = 0.45) -> str:
+        """Text of a region that holds one line, or '' if nothing is readable there."""
+        if ("line", region) not in self._cache:
+            self._cache["line", region] = self.ocr.line(self.crop(region)[0])
+        text, score = self._cache["line", region]
+        return text if score >= min_score else ""
 
-    def home(self):
+    def button(self, name: str, thorough: bool = False):
+        """Centre of a button or None. thorough also searches around the usual place."""
+        region, labels = layout.BUTTONS[name]
+        exact = name in layout.EXACT
+        spot = layout.SPOTS.get(name)
+        if spot:
+            text = self.line(spot)
+            same = (lambda a, b: normalize(a) == normalize(b)) if exact else label_matches
+            if text and any(same(text, label) for label in labels):
+                return self.px(((spot[0] + spot[2]) / 2, (spot[1] + spot[3]) / 2))
+            if not thorough:
+                return None
+        return self.find_text(labels, region, exact)
+
+    def _dimmed(self) -> bool:
+        patch = self.crop(layout.BATTLE_PATCH)[0]
+        return float(patch.max(axis=2).mean()) < 185
+
+    def home(self, thorough: bool = False):
         """Position of the Battle button if the own village is shown without any window on top."""
-        battle = self.button("home_battle")
-        if not battle or not self.button("home_build"):
+        battle = self.button("home_battle", thorough)
+        if not battle or not self.button("home_build", thorough):
             return None
-        if self.button("okay") or self.button("reload") or self.button("cancel"):
+        if self._dimmed() and (self.button("okay") or self.button("cancel") or self.button("reload")):
             return None
         return battle
 
@@ -153,6 +173,9 @@ class Screen:
 
     def loot(self):
         """(gold, elixir, dark elixir) of the opponent while scouting or fighting, or None."""
+        quick = [parse_number(self.line(row, 0.6)) for row in layout.LOOT_ROWS]
+        if quick[0] is not None and quick[1] is not None:
+            return (quick[0], quick[1], quick[2] or 0)
         values = self._below(layout.REGIONS["loot"], "loot", 0.20, 0.20)
         if values is None or len(values) < 2:
             return None

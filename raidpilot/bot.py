@@ -12,9 +12,11 @@ from . import army, layout, notify, screen as screen_mod
 from .adb import AdbError
 from .mumu import MumuError
 
-MAX_BATTLE = 215          # seconds until a battle is ended
-MIN_BATTLE = 40
-STALE_AFTER = 30          # seconds without new loot
+MAX_BATTLE = 75           # seconds after the first troop until a battle is ended at the latest
+MIN_BATTLE = 40           # never end for lack of loot before this
+STALE_AFTER = 18          # seconds without new loot
+LOOT_DONE = 0.05          # end once only this share of the loot is left ...
+LOOT_DONE_AFTER = 20      # ... and at least this many seconds have passed
 SPELL_DELAY = 7
 ABILITY_DELAY = 12
 MAX_SEARCHES = 60
@@ -37,7 +39,7 @@ class BotError(Exception):
 
 class Bot:
     def __init__(self, adb, ocr, get_settings, stats, log, emulator=None, clock=time.monotonic, sleep=None,
-                 rng=None, on_player=None):
+                 rng=None, on_player=None, on_capture=None):
         self.adb = adb
         self.ocr = ocr
         self.get_settings = get_settings
@@ -48,6 +50,8 @@ class Bot:
         self._sleep = sleep
         self.rng = rng or random.Random()
         self.on_player = on_player
+        self.on_capture = on_capture
+        self._zoomed = False
         self._stop = threading.Event()
         self._thread = None
         self.status = "Ready"
@@ -83,6 +87,7 @@ class Bot:
         self.stats.start()
         self.failures = 0
         self._warned = set()
+        self._zoomed = False
         adb_errors = 0
         reason = "Stopped"
         try:
@@ -146,34 +151,44 @@ class Bot:
         if pause:
             self._wait(pause)
 
-    def _find_any(self, shot, names):
+    def _capture(self, name: str, shot) -> None:
+        if self.on_capture:
+            try:
+                self.on_capture(name, shot.image)
+            except OSError:
+                pass
+
+    def _find_any(self, shot, names, thorough: bool = False):
         for name in names:
-            point = shot.button(name)
+            point = shot.button(name, thorough)
             if point:
                 return name, point
         return None, None
 
-    def _wait_for(self, names, timeout: float, interval: float = 0.8):
+    def _wait_for(self, names, timeout: float, interval: float = 0.3):
         """Waits for one of the buttons. Handles dialogs that can appear while an attack starts."""
-        end = self.clock() + timeout
+        began = self.clock()
         while True:
             shot = self._shot()
-            name, point = self._find_any(shot, names)
+            waited = self.clock() - began
+            # Reading the whole screen is slow: only do it when the button takes unusually long
+            name, point = self._find_any(shot, names, waited >= 4)
             if name:
                 return shot, name, point
-            if shot.shows_gems():
-                self.adb.back()
-                raise BotError("The game asks for gems (not enough gold to search?). Nothing was bought.")
-            if shot.contains_word(("shield",), layout.REGIONS["popup"]) and shot.button("okay"):
-                self._tap(shot.button("okay"))
-            if self.clock() >= end:
+            if waited >= 2.5:
+                if shot.shows_gems():
+                    self.adb.back()
+                    raise BotError("The game asks for gems (not enough gold to search?). Nothing was bought.")
+                if shot.contains_word(("shield",), layout.REGIONS["popup"]) and shot.button("okay"):
+                    self._tap(shot.button("okay"))
+            if waited >= timeout:
                 return shot, None, None
             self._wait(interval)
 
     def _wait_gone(self, name: str, timeout: float) -> bool:
         end = self.clock() + timeout
         while self.clock() < end:
-            self._wait(0.5)
+            self._wait(0.25)
             if not self._shot().button(name):
                 return True
         return False
@@ -192,8 +207,8 @@ class Bot:
                          f"Elixir: {notify.short(s['elixir'])} · Walls: {s['walls']}", self.log)
 
     # ---------- emulator and game ----------
-    def _online(self) -> list:
-        return [d["serial"] for d in self.adb.devices() if d["state"] == "device"]
+    def _online(self, search: bool = True) -> list:
+        return [d["serial"] for d in self.adb.devices(connect=search) if d["state"] == "device"]
 
     def _boot_emulator(self) -> str:
         """Starts MuMu Player instance #0 if needed and returns its ADB address."""
@@ -227,7 +242,7 @@ class Bot:
                     self.adb.connect(wanted)
                 except AdbError:
                     pass
-            online = self._online()
+            online = self._online(search=not wanted)  # probing all ports takes seconds
             if wanted in online or (not wanted and online):
                 break
             # The saved MuMu address is offline: start the emulator
@@ -242,6 +257,13 @@ class Bot:
         self.log(f"Connected to {wanted}.", "good")
 
     def _start_game(self) -> None:
+        self.status = "Looking at the screen…"
+        image = self.adb.screenshot()
+        height, width = image.shape[:2]
+        if width > height and screen_mod.Screen(image, self.ocr).home():
+            self.size = (width, height)
+            self.log("Village found.", "good")
+            return
         self.status = "Starting game…"
         self.log("Opening Clash of Clans…")
         self.adb.launch_game()
@@ -262,13 +284,15 @@ class Bot:
     def _zoom_out(self) -> None:
         if not self.adb.zoom_out(self.size):
             self._warn_once("zoom", "This emulator does not accept the zoom gesture. Zoom out once by hand.")
-        self._wait(0.8)
+        self._wait(0.4)
 
     # ---------- main cycle ----------
     def _cycle(self, settings) -> None:
-        self._go_home()
-        self._zoom_out()
         shot = self._go_home()
+        if not self._zoomed:
+            self._zoom_out()
+            self._zoomed = True
+            shot = self._go_home()
         if self.on_player:
             name = shot.player_name()
             if name:
@@ -282,28 +306,37 @@ class Bot:
     def _go_home(self):
         self.status = "Going to the village…"
         unknown = loading = relaunches = 0
-        for _ in range(160):
+        for _ in range(300):
             shot = self._shot()
-            if shot.home():
+            if shot.home(thorough=unknown >= 2):
                 return shot
+            if unknown < 2:  # screens fade in and out: look again quickly before reading everything
+                point = shot.button("return_home")
+                if point:
+                    self._tap(point, 0.8)
+                    unknown = 0
+                else:
+                    unknown += 1
+                    self._wait(0.5)
+                continue
             if self._handle_screen(shot):
                 unknown = 0
-                self._wait(2)
+                self._wait(1.0)
                 continue
-            if shot.contains_word(("loading",)) and loading < 60:
+            if shot.contains_word(("loading",)) and loading < 90:
                 loading += 1
                 self.status = "Game is loading…"
-                self._wait(3)
+                self._wait(1.5)
                 continue
             unknown += 1
-            if unknown == 3:
+            if unknown == 6:
                 self.adb.launch_game()
-                self._wait(5)
-            elif unknown in (7, 10, 13):
+                self._wait(4)
+            elif unknown in (12, 17, 22):
                 self.adb.back()          # closes open windows
-            elif unknown == 15:
+            elif unknown == 26:
                 self._tap(shot.px(layout.POINTS["close_window"]))
-            elif unknown >= UNKNOWN_RELAUNCH:
+            elif unknown >= 30:
                 relaunches += 1
                 if relaunches > 2:
                     break
@@ -313,7 +346,7 @@ class Bot:
                 self.adb.launch_game()
                 self._wait(20)
                 unknown = loading = 0
-            self._wait(2.5)
+            self._wait(1.0)
         raise BotError("The village screen is not recognised. Set the game language to English.")
 
     def _handle_screen(self, shot) -> bool:
@@ -342,24 +375,31 @@ class Bot:
             self.adb.back()
             return True
         # Still scouting or fighting: leave properly
-        point = shot.button("end_battle")
+        point = shot.button("end_battle", True)
         if point:
             self._end_battle(point)
             return True
         return False
 
     def _end_battle(self, point) -> None:
-        self._tap(point, 1.5)
-        shot = self._shot()
-        okay = shot.button("okay")
-        if okay and not shot.shows_gems():
-            self._tap(okay, 1.5)
+        """Presses End Battle / Surrender and confirms it."""
+        self._tap(point, 0.5)
+        for _ in range(5):
+            shot = self._shot()
+            okay = shot.button("okay")
+            if okay and not shot.shows_gems():
+                self._tap(okay, 0.5)
+                return
+            if shot.button("return_home") or shot.home():  # no confirmation needed
+                return
+            self._wait(0.4)
 
     def _check_storage(self, shot, settings) -> None:
+        if not (settings["stop_full"] or settings["walls"]):
+            return
         values = shot.storage()
         if values is None:
-            if settings["stop_full"] or settings["walls"]:
-                self._warn_once("storage", "The storage amounts at the top right cannot be read.")
+            self._warn_once("storage", "The storage amounts at the top right cannot be read.")
             return
         capacity = settings["max_storage"]
         if settings["walls"] and max(values) >= capacity * 0.9:
@@ -374,13 +414,13 @@ class Bot:
         point = self._shot().home()
         if not point:
             return
-        self._tap(point, 1.5)
+        self._tap(point, 0.5)
         shot, name, point = self._wait_for(("find_match", "next", "army_attack"), 12)
         if name == "find_match":
-            self._tap(point, 1.5)
+            self._tap(point, 0.6)
             shot, name, point = self._wait_for(("next", "army_attack"), 30)
         if name == "army_attack":
-            self._tap(point, 2)
+            self._tap(point, 0.8)
             shot, name, point = self._wait_for(("next",), 60)
         if name != "next":
             self.failures += 1
@@ -395,18 +435,18 @@ class Bot:
         searches = unreadable = 0
         while True:
             self.status = f"Searching opponent {searches + 1}…"
-            self._wait(0.8)
+            self._wait(0.3)
             shot = self._shot()
             loot = shot.loot()
             if loot is None:
-                self._wait(1.0)
+                self._wait(0.8)
                 shot = self._shot()
                 loot = shot.loot()
             if loot is None:
                 unreadable += 1
                 self.log("The loot cannot be read.", "warn")
                 if unreadable >= 3:
-                    leave = shot.button("end_battle")
+                    leave = shot.button("end_battle", True)
                     if leave:
                         self._end_battle(leave)
                     raise BotError("The loot cannot be read. Check that the resolution is 1600×900.")
@@ -419,12 +459,12 @@ class Bot:
                     return loot
             searches += 1
             self.stats.add(searches=1)
-            point = shot.button("next")
+            point = shot.button("next", True)
             if searches >= MAX_SEARCHES or not point:
                 if searches >= MAX_SEARCHES:
                     self.log(f"No match after {searches} villages. Lower the minimum loot if this repeats.", "warn")
                     self.failures += 1
-                leave = shot.button("end_battle")
+                leave = shot.button("end_battle", True)
                 if leave:
                     self._end_battle(leave)
                 return None
@@ -455,7 +495,7 @@ class Bot:
         if not troops:
             self.failures += 1
             self.log("No troops found in the troop bar. Leaving the battle.", "warn")
-            leave = shot.button("end_battle")
+            leave = shot.button("end_battle", True)
             if leave:
                 self._end_battle(leave)
             return
@@ -465,49 +505,51 @@ class Bot:
         span = army.line_span(settings["army"])
         names = {"tl": "Top Left", "tr": "Top Right", "bl": "Bottom Left", "br": "Bottom Right"}
         self.log("Deploying from: " + ", ".join(names[s] for s in sides))
-        for slot in troops:
-            self._deploy(shot, slot, sides, span)
-
-        middle = shot.px(army.line_points(sides[:1], 3)[1])
-        if settings["siege"]:
-            for slot in (s for s in slots if s.role == "siege"):
-                self._tap((slot.x, slot.y), 0.3)
-                self._tap(middle, 0.3)
-        heroes = [s for s in slots if s.role == "hero"] if settings["heroes"] else []
-        for slot in heroes:
-            self._tap((slot.x, slot.y), 0.3)
-            self._tap(middle, 0.3)
         started = self.clock()
+        outward = 0.0
+        for slot in troops:
+            outward = self._deploy(shot, slot, sides, span, outward)
+
+        if settings["siege"]:
+            middle = shot.px(army.line_points(sides[:1], 3, outward)[1])
+            for slot in (s for s in slots if s.role == "siege"):
+                self._tap((slot.x, slot.y), 0.15)
+                self._tap(middle, 0.15)
+        heroes = []
+        if settings["heroes"]:
+            heroes = [s for s in slots if s.role == "hero" and self._deploy_hero(shot, s, sides, outward)]
+        self.log(f"Army deployed after {self.clock() - started:.0f} s.")
 
         spells = army.choose_spells(shot.image, slots, settings["spell"])
         if spells:
             self.status = "Casting spells…"
-            self._wait(SPELL_DELAY)
+            self._wait(max(0.0, SPELL_DELAY - (self.clock() - started)))
             for slot in spells:
-                self._tap((slot.x, slot.y), 0.3)
+                self._tap((slot.x, slot.y), 0.15)
                 for rel in army.spell_points(sides, min(slot.count, 11)):
-                    self._tap(shot.px(rel), 0.35)
+                    self._tap(shot.px(rel), 0.15)
         elif settings["spell"] != "none":
             self._warn_once("spells", "No spells found in the army.")
+        self._capture("last_deploy", self._shot())
         self._watch_battle(loot, heroes, started)
 
-    def _deploy(self, shot, slot, sides, span) -> None:
+    def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> float:
+        """Places all troops of one card, spread evenly. Returns how far outwards it had to go."""
         remaining = slot.count
-        outward = 0.0
         stuck = 0
         for _ in range(10):
-            self._tap((slot.x, slot.y), 0.3)
+            self._tap((slot.x, slot.y), 0.15)
             points = [shot.px(p) for p in army.line_points(sides, min(remaining, 40), outward, span)]
             for first in range(0, len(points), 8):
                 self._check_stop()
                 self.adb.tap_many(points[first:first + 8])
-            self._wait(0.7)
+            self._wait(0.35)
             left = army.card_count(self._shot(), slot.left, slot.right)
             if left is None:  # look once more before believing it
-                self._wait(0.6)
+                self._wait(0.4)
                 left = army.card_count(self._shot(), slot.left, slot.right)
             if not left:  # counter gone or x0: everything is deployed
-                return
+                return outward
             if left >= remaining:
                 # Nothing arrived: probably inside the red line, move further out
                 stuck += 1
@@ -516,38 +558,63 @@ class Bot:
                     break
             remaining = left
         self.log(f"{remaining} troops could not be deployed.", "warn")
+        return outward
+
+    def _deploy_hero(self, shot, slot, sides, outward: float) -> bool:
+        for extra in (0.0, 0.04, 0.09):
+            self._tap((slot.x, slot.y), 0.15)
+            self._tap(shot.px(army.line_points(sides[:1], 3, outward + extra)[1]), 0.5)
+            if army.hero_deployed(self._shot().image, slot.left, slot.right):
+                return True
+        self.log("A hero could not be deployed.", "warn")
+        return False
 
     def _watch_battle(self, loot, heroes, started) -> None:
         self.status = "Battle in progress…"
+        total = loot[0] + loot[1]
+        remaining = total
         last_loot = loot
-        changed = self.clock()
+        progress = self.clock()
         ability_used = not heroes
-        lost = 0
+        lost = nearly_empty = 0
         while True:
-            self._wait(2.5)
+            self._wait(1.0)
             if not ability_used and self.clock() - started >= ABILITY_DELAY:
                 for slot in heroes:
-                    self._tap((slot.x, slot.y), 0.25)
+                    self._tap((slot.x, slot.y), 0.15)
                 ability_used = True
             shot = self._shot()
-            if shot.button("return_home"):
-                break
-            leave = shot.button("end_battle")
+            leave = shot.button("end_battle", thorough=lost >= 2)
             if not leave:
+                if shot.button("return_home"):
+                    break
                 lost += 1
-                if lost >= 8:
+                if lost >= 12:
                     self.failures += 1
                     self.log("The battle screen disappeared.", "warn")
                     return
                 continue
             lost = 0
             now_loot = shot.loot()
-            if now_loot and now_loot != last_loot:
-                last_loot = now_loot
-                changed = self.clock()
-            stale = self.clock() - changed >= STALE_AFTER and self.clock() - started >= MIN_BATTLE
-            if stale or self.clock() - started >= MAX_BATTLE:
-                self.log("No more loot coming in, ending the battle." if stale else "Time is up, ending the battle.")
+            if now_loot and now_loot[0] + now_loot[1] <= total * 1.02:  # more than at the start: misread
+                left = now_loot[0] + now_loot[1]
+                if left <= remaining - max(1000, total // 200):
+                    progress = self.clock()
+                    remaining, last_loot = left, now_loot
+                elif left > remaining:  # an earlier picture was misread
+                    remaining, last_loot = left, now_loot
+                nearly_empty = nearly_empty + 1 if left <= total * LOOT_DONE else 0
+            elapsed = self.clock() - started
+            reason = None
+            if elapsed >= MAX_BATTLE:
+                reason = "Time limit reached"
+            elif nearly_empty >= 2 and elapsed >= LOOT_DONE_AFTER:
+                reason = "Almost all loot taken"
+            elif elapsed >= MIN_BATTLE and self.clock() - progress >= STALE_AFTER:
+                reason = "No more loot coming in"
+            if reason:
+                self.log(f"{reason}, ending the battle after {elapsed:.0f} s.")
+                self._capture("last_battle_end", shot)
                 self._end_battle(leave)
                 shot, name, _ = self._wait_for(("return_home",), 25)
                 if not name:
@@ -558,16 +625,18 @@ class Bot:
 
     def _finish(self, first, last) -> None:
         self.status = "Reading result…"
-        self._wait(4)  # the numbers count up
+        self._wait(1.5)  # the numbers count up
         shot = self._shot()
         result = shot.result_loot()
-        for _ in range(3):
-            self._wait(1.2)
+        for _ in range(4):
+            self._wait(0.6)
             shot = self._shot()
             again = shot.result_loot()
-            if again == result:
-                break
+            settled = again == result and again is not None
             result = again
+            if settled:
+                break
+        self._capture("last_result", shot)
         if result is None or max(result) > 40_000_000:
             # Fallback: what disappeared from the opponent
             result = tuple(max(0, a - b) for a, b in zip(first, last))
@@ -579,7 +648,7 @@ class Bot:
             self._report("RaidPilot status")
         point = shot.button("return_home")
         if point:
-            self._tap(point, 3)
+            self._tap(point, 0.8)
 
     # ---------- walls ----------
     def _find_wall_entry(self):

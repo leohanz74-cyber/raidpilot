@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from raidpilot import army, layout, settings, store, templates, updater, zoom
-from raidpilot.adb import Adb
+from raidpilot.adb import Adb, decode_raw
 from raidpilot.api import Api
 from raidpilot.mumu import Mumu, MumuError
 from raidpilot.screen import Screen, label_matches, parse_number
@@ -194,8 +194,36 @@ def test_purchase_dialog_is_never_confirmed(ocr):
     assert Screen(image, ocr).shows_gems()
 
 
+def test_raw_screenshot_is_decoded():
+    import struct
+
+    pixels = np.zeros((4, 6, 4), np.uint8)
+    pixels[..., 0] = 200  # red
+    for header in (struct.pack("<III", 6, 4, 1), struct.pack("<IIII", 6, 4, 1, 0)):
+        image = decode_raw(header + pixels.tobytes())
+        assert image.shape == (4, 6, 3) and image[0, 0].tolist() == [0, 0, 200]
+    warned = b"[Warning] Multiple displays were found\nUsing the first one\n" + header + pixels.tobytes()
+    assert decode_raw(warned).shape == (4, 6, 3)
+    assert decode_raw(b"\x89PNG" + bytes(40)) is None
+
+
+def test_decorations_are_not_read_as_loot():
+    from raidpilot.screen import parse_number
+
+    assert parse_number("1 234 567") == 1234567
+    assert parse_number("0O2x") is None and parse_number("676 890 2x") is None
+
+
+def test_random_side_is_fully_visible():
+    import random
+
+    picked = {army.choose_sides("random", "dragon", random.Random(i))[0] for i in range(40)}
+    assert picked == {"tl", "tr"}
+
+
 def test_screenshot_ignores_warning_before_png():
     png = cv2.imencode(".png", np.zeros((4, 6, 3), np.uint8))[1].tobytes()
     adb = Adb()
+    adb._raw = False
     adb._run = lambda *a, **k: b"[Warning] Multiple displays\n" + png
     assert adb.screenshot().shape == (4, 6, 3)

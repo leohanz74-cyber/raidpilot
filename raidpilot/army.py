@@ -51,36 +51,44 @@ def find_cards(image) -> list:
     return cards[:14]
 
 
-def read_counts(screen) -> list:
-    """(x, count) of every 'x12' counter in the troop bar."""
-    found = []
-    for word in screen.words(layout.REGIONS["troop_bar"]):
-        for match in COUNT_RE.finditer(word.text):
-            digits = match.group(1).translate(_DIGITS)
-            # The counter sits at the right end of what was read as one word
-            share = (match.start() + match.end()) / 2 / max(1, len(word.text))
-            found.append((int(word.x + word.w * share), int(digits)))
-    return sorted(found)
-
-
-def header_count(screen, left: int, right: int):
-    """Reads the counter of one card on its own, enlarged. None if the card has none."""
-    height = screen.height
-    crop = screen.image[int(.822 * height):int(.874 * height), max(0, left):right]
-    if crop.size == 0:
-        return None
-    crop = cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    for word in screen.ocr.read(crop):
-        match = COUNT_RE.search(word.text)
-        if match:
-            return int(match.group(1).translate(_DIGITS))
-    return None
+def _parse_count(text: str):
+    match = COUNT_RE.search(text)
+    return int(match.group(1).translate(_DIGITS)) if match else None
 
 
 def card_count(screen, left: int, right: int):
-    """Counter of the card between left and right, or None."""
-    inside = [count for x, count in read_counts(screen) if left - 4 <= x <= right + 4]
-    return inside[-1] if inside else header_count(screen, left, right)
+    """Counter ('x12') of the card between left and right, or None if the card has none."""
+    height = screen.height
+    width = right - left
+    left = max(0, left)
+    # First the whole head of the card, then only its right part where the counter ends
+    for y0, y1, x0 in ((0.822, 0.874, left), (0.831, 0.865, left + int(width * 0.23))):
+        crop = screen.image[int(y0 * height):int(y1 * height), x0:right]
+        text, score = screen.ocr.line(crop)
+        count = _parse_count(text) if score >= 0.4 else None
+        if count is not None:
+            return count
+    # Slower, but finds counters the quick way misses
+    crop = screen.image[int(.822 * height):int(.874 * height), left:right]
+    if crop.size == 0:
+        return None
+    for word in screen.ocr.read(cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)):
+        count = _parse_count(word.text)
+        if count is not None:
+            return count
+    return None
+
+
+def hero_deployed(image, left: int, right: int) -> bool:
+    """A green health bar in a dark frame above the card means the hero is on the field."""
+    height = image.shape[0]
+
+    def band(rows):
+        return image[int(rows[0] * height):int(rows[1] * height), left + 10:right - 10]
+
+    # The pure green of the bar and the frame tell it apart from grass behind the card
+    return (_share(band(layout.HERO_BAR), (40, 190, 140), (75, 255, 255)) > 0.35
+            and _share(band(layout.HERO_FRAME), (0, 0, 0), (180, 255, 90)) > 0.8)
 
 
 def _share(patch, low, high) -> float:
@@ -165,7 +173,8 @@ def choose_sides(style: str, army: str, rng=random) -> list:
         # Goblins loot best when they come from everywhere
         if army == "sneaky_goblin":
             return ["tl", "tr", "br", "bl"]
-        return [rng.choice(["tl", "tr", "bl", "br"])]
+        # Only the upper sides: the troop bar hides part of the lower ones, troops would bunch up there
+        return [rng.choice(["tl", "tr"])]
     return [style]
 
 

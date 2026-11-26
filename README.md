@@ -33,7 +33,7 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 | Spells | None, Rage Spells (purple spell cards) or Totem Spells (the other spell cards). |
 | Minimum Loot Threshold | Opponent's gold + elixir needed before it attacks. Every "Next" costs gold. |
 | Max Storage Capacity | Your storage size; used for "stop when full" and wall upgrades. |
-| Deployment Style | Random side, a fixed side or all sides. |
+| Deployment Style | Random (one of the two upper sides, which are fully visible), a fixed side or all sides. |
 | Deploy Heroes Automatically | **Off by default.** Hero cards are never touched while off. |
 | Use Siege Machines | Deploys the siege machine card. |
 | Use Event Troops | Deploys cards with the event badge, plus icons saved with "Capture Event Troop". |
@@ -43,9 +43,15 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 
 **Beta** features have not been verified on the real game yet.
 
+## When a battle ends
+
+At the latest 75 seconds after the first troop; earlier when no new loot arrived for 18 seconds (not before
+second 40) or when almost nothing is left. The loot gained so far is kept; ending early can cost stars.
+
 ## When something is not recognised
 
-The **Log** tab says which step failed. Log file and settings are in `%APPDATA%\RaidPilot`.
+The **Log** tab says which step failed. Log file, settings and the latest pictures of an attack (folder
+`captures`) are in `%APPDATA%\RaidPilot`.
 
 ## Updates
 

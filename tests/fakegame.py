@@ -25,6 +25,8 @@ class FakeGame:
         self.events = []
         self.selected = None
         self.after_attack = None
+        self.endless = False
+        self.raid_started = self.raid_ended = None
         self._reset_army()
 
     def _reset_army(self):
@@ -76,7 +78,7 @@ class FakeGame:
                 self.state = "scout"
         elif self.state == "battle":
             self.ticks += 1
-            if self.ticks >= 14:
+            if self.ticks >= 14 and not self.endless:
                 self.state = "result"
         return self.render()
 
@@ -102,6 +104,7 @@ class FakeGame:
                 self._search()
             elif near(116, 669, 90, 30):
                 self.events.append("end")
+                self.raid_ended = self.now
                 self.state = "home" if self.state == "scout" else "confirm"
             elif y >= 740:
                 for index, (name, _, _, left) in enumerate(self.army):
@@ -144,6 +147,7 @@ class FakeGame:
         if name != "rage" and self.state == "scout":
             self.state = "battle"
             self.ticks = 0
+            self.raid_started = self.now
 
     def loot_full(self):
         return self.loots[min(self.base, len(self.loots) - 1)]
@@ -181,8 +185,9 @@ class FakeGame:
             button("Build", 1495, 855, 120)
             text("1/6", 1455, 700, 0.9)
         if self.state in ("home", "welcome"):
-            button("Battle", 107, 858, 130)
+            button("Battle", 107, 858, 190)
             if self.state == "welcome":
+                image[:] = (image * 0.5).astype(np.uint8)
                 cv2.rectangle(image, (350, 120), (1250, 820), (225, 235, 240), -1)
                 text("Welcome Back Chief!", 800, 190, 1.4, center=True)
                 button("Okay", 820, 749, 220, (70, 170, 70))
@@ -193,7 +198,7 @@ class FakeGame:
         elif self.state == "clouds":
             image[:] = (200, 200, 200)
         elif self.state in ("scout", "battle", "confirm"):
-            part = 1.0 if self.state == "scout" else max(0.0, 1 - self.ticks / 20)
+            part = 1.0 if self.state == "scout" else max(0.5 if self.endless else 0.0, 1 - self.ticks / 20)
             text("Available Loot:", 78, 82, 0.75)
             for value, y in zip(self.loot_full(), (138, 188, 240)):
                 text(spaced(int(value * part)), 82, y, 0.9)
@@ -212,6 +217,9 @@ class FakeGame:
                     cv2.rectangle(image, (left + 6, 749), (left + 37, 779), (170, 215, 250), -1)
                 if count is not None:
                     text(f"x{count}", left + 44, 776, 0.8)
+                elif self.deployed.get(name):
+                    cv2.rectangle(image, (left + 4, 710), (left + CARD - 4, 734), (25, 25, 25), -1)
+                    cv2.rectangle(image, (left + 8, 719), (left + CARD - 8, 733), (30, 235, 100), -1)
             if self.state == "confirm":
                 cv2.rectangle(image, (450, 250), (1150, 620), (225, 225, 225), -1)
                 text("Surrender battle?", 800, 320, 1.1, center=True)

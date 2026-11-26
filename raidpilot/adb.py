@@ -1,8 +1,10 @@
 """Small ADB client. It only reads screenshots and sends touch input; the game itself is never modified."""
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -53,11 +55,30 @@ def find_adb(configured: str = "") -> str:
     raise AdbError("adb was not found. Install MuMu Player or another Android emulator.")
 
 
+def decode_raw(data: bytes):
+    """Uncompressed 'screencap' output -> BGR picture, or None if it is something else."""
+    # Some emulators print warning lines in front of the data: try behind each of them
+    starts = [0] + [i + 1 for i in range(min(len(data), 1000)) if data[i] == 10]
+    for start in starts:
+        if len(data) - start < 16:
+            break
+        width, height, pixel_format = struct.unpack_from("<III", data, start)
+        if not (0 < width <= 8192 and 0 < height <= 8192) or pixel_format not in (1, 2):
+            continue
+        header = len(data) - start - width * height * 4
+        if header not in (12, 16):
+            continue
+        pixels = np.frombuffer(data, np.uint8, offset=start + header).reshape(height, width, 4)
+        return cv2.cvtColor(pixels, cv2.COLOR_RGBA2BGR)
+    return None
+
+
 class Adb:
     def __init__(self, path: str = ""):
         self.configured = path
         self.serial = ""
         self._touch = {}
+        self._raw = None          # uncompressed screenshots: unknown until measured
 
     @property
     def path(self) -> str:
@@ -116,6 +137,26 @@ class Adb:
         return self._run(["shell", command], timeout=timeout).decode("utf-8", "replace")
 
     def screenshot(self) -> np.ndarray:
+        if self._raw is None:
+            self._raw = self._raw_is_faster()
+        if self._raw:
+            image = decode_raw(self._run(["exec-out", "screencap"], timeout=25))
+            if image is not None:
+                return image
+            self._raw = False
+        return self._png_screenshot()
+
+    def _raw_is_faster(self) -> bool:
+        """Takes one picture each way. Uncompressed usually wins: the emulator need not build a PNG."""
+        self._png_screenshot()  # the first call can be slow for unrelated reasons
+        started = time.perf_counter()
+        self._png_screenshot()
+        png = time.perf_counter() - started
+        started = time.perf_counter()
+        image = decode_raw(self._run(["exec-out", "screencap"], timeout=25))
+        return image is not None and time.perf_counter() - started < png
+
+    def _png_screenshot(self) -> np.ndarray:
         raw = self._run(["exec-out", "screencap", "-p"], timeout=25)
         # Some emulators print a warning in front of the PNG data
         start = raw.find(b"\x89PNG")

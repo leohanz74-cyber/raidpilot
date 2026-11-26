@@ -37,6 +37,22 @@ class Ocr:
             })
         return self._engine
 
+    def warm(self) -> None:
+        """Loads the models ahead of time so START reacts at once."""
+        with self._lock:
+            self._load()
+
+    def line(self, image) -> tuple:
+        """(text, score) of a picture that holds exactly one line. Much faster than read()."""
+        if image is None or image.size == 0:
+            return "", 0.0
+        with self._lock:
+            result = self._load()(image, use_det=False, use_cls=False, use_rec=True)
+        texts = getattr(result, "txts", None)
+        if not texts:
+            return "", 0.0
+        return texts[0], float(result.scores[0])
+
     def read(self, image) -> list:
         """All texts of the picture with their position (pixels of the given picture)."""
         if image is None or image.size == 0:

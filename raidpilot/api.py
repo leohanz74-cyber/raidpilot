@@ -50,6 +50,7 @@ class Api:
         self._window = None
         self._update = None
         self._log(f"RaidPilot {VERSION} started.")
+        threading.Thread(target=self._warm_up, daemon=True).start()
         if check_updates:
             threading.Thread(target=self._look_for_update, daemon=True).start()
 
@@ -63,6 +64,20 @@ class Api:
         if self._running():
             self._bot.stop()
             self._bot.join(5)
+
+    def _warm_up(self) -> None:
+        try:
+            self._ocr.warm()
+        except Exception as exc:  # shown again with details when the bot starts
+            self._log(f"Text recognition could not be loaded: {exc}", "warn")
+
+    def _capture(self, name: str, image) -> None:
+        """Keeps the latest pictures of an attack to look into problems."""
+        folder = store.data_dir() / "captures"
+        folder.mkdir(exist_ok=True)
+        ok, data = cv2.imencode(".png", image)
+        if ok:
+            (folder / f"{name}.png").write_bytes(data.tobytes())
 
     def _look_for_update(self) -> None:
         try:
@@ -195,7 +210,7 @@ class Api:
         if self._running():
             return
         self._bot = Bot(self._adb, self._ocr, settings.load, self._stats, self._log,
-                        emulator=self._mumu, on_player=self._save_player)
+                        emulator=self._mumu, on_player=self._save_player, on_capture=self._capture)
         self._log("Bot started.", "good")
         self._bot.start()
 

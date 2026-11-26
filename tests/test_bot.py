@@ -60,6 +60,22 @@ def test_several_attacks_in_a_row(ocr):
     assert stats.lifetime()["attacks"] == 3
 
 
+def test_battle_without_new_loot_is_ended_early(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.endless = True  # the loot stops at half and the battle never ends on its own
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert "end" in game.events and stats.session["attacks"] == 1, log
+    assert 30 <= game.raid_ended - game.raid_started <= 80, log
+
+
+def test_game_is_not_relaunched_when_the_village_is_open(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    bot, _, log = run_bot(game, ocr)
+    assert not bot.last_error and "launch" not in game.events, log
+    assert game.events.count("zoom:home") == 1
+
+
 def test_stops_when_storage_full(ocr):
     game = FakeGame(storage=(20_000_000, 20_000_000))
     bot, stats, log = run_bot(game, ocr, stop_full=True, max_storage=20_000_000)
