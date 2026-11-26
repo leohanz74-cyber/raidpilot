@@ -9,7 +9,8 @@ BUTTONS = {
     "army_attack": ((0.70, 0.80, 1.00, 0.98), ("Attack!", "Attack")),
     "next": ((0.76, 0.60, 1.00, 0.86), ("Next",)),
     "end_battle": ((0.00, 0.66, 0.20, 0.82), ("End Battle", "Surrender")),
-    "return_home": ((0.38, 0.77, 0.62, 0.95), ("Return Home", "Return")),
+    # multiplayer shows it at the bottom, practice battles a bit higher
+    "return_home": ((0.36, 0.66, 0.66, 0.95), ("Return Home", "Return")),
     "okay": ((0.15, 0.40, 0.85, 0.95), ("Okay", "OK")),
     "cancel": ((0.15, 0.40, 0.85, 0.95), ("Cancel",)),
     "reload": ((0.10, 0.35, 0.90, 0.95), ("Reload Game", "Reload", "Try Again", "Retry")),
