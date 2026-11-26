@@ -33,6 +33,11 @@ class FakeGame:
         self.menu_claim = False        # the attack menu offers a reward
         self.roster = None        # another army than the usual one
         self.red = []             # (x, y, radius): places outside the base that are red as well
+        self.close_up = False     # the camera is zoomed in
+        self.zoom_method = "touch:0"
+        self.zoom_ok = {"touch:0"}          # the ways of zooming this emulator understands
+        self.stuck_after_walls = False      # the game ignores zooming after a wall until it restarts
+        self.stuck = False
         self.serial = ""
         self.configured = ""
         self.path = "fake-adb"
@@ -83,10 +88,23 @@ class FakeGame:
     def stop_game(self):
         self.events.append("stop")
         self.state = "home"
+        self.stuck = False
+        self.wall = None
+
+    def zoom_methods(self):
+        return ["touch:0", "wheel"]
+
+    def touch_summary(self):
+        return "/dev/input/event4 Fake Touchscreen (900x1600)"
+
+    def pinch(self, size, zoom_out, method):
+        if method in self.zoom_ok and not self.stuck:
+            self.close_up = not zoom_out
+        return True
 
     def zoom_out(self, size):
         self.events.append("zoom:" + self.state)
-        return True
+        return self.pinch(size, True, self.zoom_method)
 
     def back(self):
         self.events.append("back")
@@ -169,6 +187,8 @@ class FakeGame:
                 for row_y, (_, _, wall) in self.visible_rows():
                     if wall is not None and abs(y - row_y - 8) <= 30:
                         self.wall = wall
+                        self.close_up = True  # the camera moves to the wall
+                        self.stuck = self.stuck_after_walls
                         self.events.append(f"select:{wall}")
             elif self.wall is not None and 780 <= y <= 890:
                 for name, cx in (("gold", 399), ("elixir", 572), ("ring", 750)):
@@ -242,6 +262,7 @@ class FakeGame:
     def _deploy(self, x, y):
         name, count = self.army[self.selected][:2]
         inside_base = abs(x / W - 0.505) / 0.37 + abs(y / H - 0.455) / 0.40 < 1
+        inside_base = inside_base or self.close_up  # all one can see is the base
         inside_base = inside_base or any((x - rx) ** 2 + (y - ry) ** 2 < r * r for rx, ry, r in self.red)
         if inside_base and name != "rage":
             self.events.append("redzone")
@@ -292,6 +313,9 @@ class FakeGame:
                 cv2.line(image, (x - reach, y - sign * reach), (x + reach, y + sign * reach), (255, 255, 255),
                          max(5, size // 7), cv2.LINE_AA)
 
+        if self.close_up and self.state in ("home", "scout", "battle"):
+            for x, y in ((380, 230), (800, 230), (590, 450), (1010, 450)):
+                cv2.rectangle(image, (x, y), (x + 200, y + 200), (150, 190, 215), -1)
         spaced = lambda n: f"{n:,}".replace(",", " ")
         if self.state in ("home", "welcome", "menu", "army"):
             text(spaced(self.storage[0]), 1365, 55, 0.9)

@@ -99,3 +99,14 @@ def pinch_paths(size, zoom_out: bool = True, steps: int = 10) -> list:
         left.append((width * (0.5 - d), height * 0.45))
         right.append((width * (0.5 + d), height * 0.45))
     return [left, right]
+
+
+def wheel_script(size, zoom_out: bool = True, ticks: int = 6) -> str:
+    """The same with a mouse wheel (newer Android versions), for emulators that ignore the fingers."""
+    command = f"input mouse scroll {size[0] // 2} {size[1] // 2} --axis VSCROLL,{-1 if zoom_out else 1}"
+    return ";".join([command] * ticks)
+
+
+def describe(method: str) -> str:
+    return "the mouse wheel" if method == "wheel" else "the two-finger gesture"
+

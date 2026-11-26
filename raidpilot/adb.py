@@ -78,6 +78,7 @@ class Adb:
         self.configured = path
         self.serial = ""
         self._touch = {}
+        self.zoom_method = "touch:0"
         self._raw = None          # uncompressed screenshots: unknown until measured
 
     @property
@@ -180,17 +181,33 @@ class Adb:
     def back(self) -> None:
         self.shell("input keyevent 4")
 
+    def zoom_methods(self) -> list:
+        """The ways of zooming to try: every touch screen the device lists now, then a mouse wheel."""
+        devices = zoom.parse_touch_devices(self.shell("getevent -pl"))
+        devices.sort(key=lambda device: "touch" not in device.name.lower())
+        self._touch[self.serial] = devices
+        return [f"touch:{number}" for number in range(len(devices))] + ["wheel"]
+
+    def touch_summary(self) -> str:
+        devices = self._touch.get(self.serial) or []
+        return ", ".join(f"{d.path} {d.name} ({d.max_x}x{d.max_y})" for d in devices) or "none"
+
+    def pinch(self, size, zoom_out: bool, method: str) -> bool:
+        """Zooms in one of the ways of zoom_methods(). False if the device refuses it."""
+        if method == "wheel":
+            command = zoom.wheel_script(size, zoom_out)
+        else:
+            device = self._touch[self.serial][int(method.split(":")[1])]
+            events = zoom.gesture_events(device, zoom.pinch_paths(size, zoom_out), size)
+            command = zoom.shell_script(device, events)
+        output = self.shell(command, timeout=60).lower()
+        return not any(word in output for word in ("denied", "not found", "error", "unknown", "usage:"))
+
     def zoom_out(self, size) -> bool:
-        """Two-finger pinch. False if the emulator offers no multi-touch input."""
-        if self.serial not in self._touch:
-            devices = zoom.parse_touch_devices(self.shell("getevent -pl"))
-            self._touch[self.serial] = devices[0] if devices else None
-        device = self._touch[self.serial]
-        if device is None:
-            return False
-        events = zoom.gesture_events(device, zoom.pinch_paths(size, zoom_out=True), size)
-        output = self.shell(zoom.shell_script(device, events), timeout=60)
-        return "denied" not in output.lower() and "not found" not in output.lower()
+        """Zooms out in the way that works (see zoom_methods)."""
+        if self.serial not in self._touch:  # not looked at this device yet
+            self.zoom_method = self.zoom_methods()[0]
+        return self.pinch(size, True, self.zoom_method)
 
     def launch_game(self) -> None:
         self.shell(f"monkey -p {PACKAGE} -c android.intent.category.LAUNCHER 1")

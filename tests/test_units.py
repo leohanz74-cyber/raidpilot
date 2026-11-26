@@ -445,3 +445,16 @@ def test_screenshot_ignores_warning_before_png():
     adb._raw = False
     adb._run = lambda *a, **k: b"[Warning] Multiple displays\n" + png
     assert adb.screenshot().shape == (4, 6, 3)
+
+
+def test_zoom_methods_and_mouse_wheel(monkeypatch):
+    adb = Adb("adb")
+    sent = []
+    monkeypatch.setattr(adb, "shell", lambda command, timeout=30: (sent.append(command), "" if "input" in command
+                        or "sendevent" in command else GETEVENT)[1])
+    assert adb.zoom_methods() == ["touch:0", "wheel"]
+    assert adb.pinch((1600, 900), True, "wheel") and sent[-1].count("input mouse scroll 800 450 --axis VSCROLL,-1") == 6
+    assert adb.pinch((1600, 900), False, "wheel") and "VSCROLL,1" in sent[-1]
+    assert adb.zoom_out((1600, 900)) and sent[-1].startswith("sendevent ")
+    adb.zoom_method = "wheel"
+    assert adb.zoom_out((1600, 900)) and sent[-1].startswith("input mouse scroll")

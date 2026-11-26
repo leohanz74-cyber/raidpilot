@@ -8,7 +8,7 @@ import traceback
 
 import numpy as np
 
-from . import army, layout, notify, power, screen as screen_mod, storages
+from . import army, layout, notify, power, screen as screen_mod, storages, zoom
 from .adb import AdbError
 from .mumu import MumuError
 
@@ -43,6 +43,7 @@ WALL_SCROLLS = 22         # swipes through the builder list while looking for wa
 WALL_TRIGGER = 0.5        # walls are upgraded once a storage is this full
 WALL_FLOOR = 1_000_000    # after buying, stop when gold and elixir are both below this
 WALL_PAUSE = 5            # village visits without a new try after walls did not work
+ZOOM_CHANGE = 20          # screen.view_change from which a zoom really moved the camera
 REWARD_TAPS = 30          # taps through reward screens before giving up
 
 
@@ -374,11 +375,48 @@ class Bot:
             self._warn_once("zoom", "This emulator does not accept the zoom gesture. Zoom out once by hand.")
         self._wait(0.4)
 
+    def _zoom_works(self) -> bool:
+        """Zooms in and out again on the village and looks whether the picture follows. The first
+        way of zooming that does this is used from then on."""
+        for method in self.adb.zoom_methods():
+            self.adb.pinch(self.size, False, method)
+            self._wait(0.8)
+            near = self._shot()
+            self.adb.pinch(self.size, True, method)
+            self._wait(0.8)
+            far = self._shot()
+            change = screen_mod.view_change(near.image, far.image)
+            if change >= ZOOM_CHANGE:
+                if method != self.adb.zoom_method:
+                    self.log(f"Zooming with {zoom.describe(method)} from now on.")
+                self.adb.zoom_method = method
+                self._zoom_out()  # all the way
+                return True
+            self.log(f"Zoom check: {zoom.describe(method)} has no effect (change {change:.0f}).", "warn")
+            self._capture("zoom_failed", far)
+        return False
+
+    def _ensure_zoom(self) -> None:
+        """Moves the camera out and makes sure it arrived; a game that ignores it is restarted once."""
+        self.status = "Zooming out…"
+        if self._zoom_works():
+            return
+        self.log(f"Zooming out has no effect, restarting the game. Touch devices: {self.adb.touch_summary()}",
+                 "warn")
+        self.adb.stop_game()
+        self._wait(2)
+        self.adb.launch_game()
+        self._wait(15)
+        self._go_home()
+        self.status = "Zooming out…"
+        if not self._zoom_works():
+            self.log("Zooming out still does not work. Zoom out once by hand.", "warn")
+
     # ---------- main cycle ----------
     def _cycle(self, settings) -> None:
         shot = self._go_home()
         if not self._zoomed:
-            self._zoom_out()
+            self._ensure_zoom()
             self._zoomed = True
             shot = self._go_home()
         if self.on_player:
@@ -508,7 +546,7 @@ class Bot:
             elif self._upgrade_walls(settings):
                 home = self._go_home()
                 values = home.storage() or values
-                self._zoom_out()  # the camera moved to the walls
+                self._ensure_zoom()  # the camera moved to the walls
         if settings["stop_full"] and min(values) >= capacity * 0.98:
             raise Done("Storages are full.")
 
@@ -628,9 +666,13 @@ class Bot:
         self.log("Deploying from: " + ", ".join(SIDE_NAMES[s] for s in sides))
         wardens = {s.index for s in slots if s.role == "hero" and army.is_warden(shot.image, s.left, s.right)}
         started = self.clock()
-        outward = 0.0
+        outward, placed = 0.0, 0
         for slot in troops:
-            outward = self._deploy(shot, slot, sides, span, outward)
+            outward, landed = self._deploy(shot, slot, sides, span, outward)
+            placed += landed
+            if not placed:  # not one place on any line took a troop
+                self._leave_unplaceable()
+                return
 
         if settings["siege"]:
             for slot in (s for s in slots if s.role == "siege" and s.count):
@@ -664,6 +706,18 @@ class Bot:
             self._capture("last_deploy", self._shot())
         self._watch_battle(loot, sorted(abilities + waves, key=lambda entry: entry[0]), started)
 
+    def _leave_unplaceable(self) -> None:
+        """Nothing can be placed: the camera is most likely too close. Leave before heroes and spells
+        are wasted, and check the zoom in the village."""
+        self.failures += 1
+        self._zoomed = False
+        shot = self._shot()
+        self._capture("nothing_placed", shot)
+        self.log("Nothing can be placed, the view is probably zoomed in. Leaving the battle.", "warn")
+        leave = shot.button("end_battle", True)
+        if leave:
+            self._end_battle(leave)
+
     def _loot_side(self, shot):
         """The edge closest to the opponent's gold and elixir storages, or None."""
         try:
@@ -686,9 +740,10 @@ class Bot:
             self.log("Storages not recognised on this base, using a random side.", "warn")
         return side
 
-    def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> float:
+    def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> tuple:
         """Places all troops of one card, however many there are: spread along the whole line first,
-        what is left at single places. Returns the line (distance outwards) on which troops landed."""
+        what is left at single places. Returns the line (distance outwards) on which troops landed
+        and how many were placed."""
         remaining = slot.count
         step = LINE_STEPS.index(outward) if outward in LINE_STEPS else 0
         landed = outward
@@ -714,7 +769,7 @@ class Bot:
                 self._wait(0.4)
                 left = army.card_count(self._shot(), slot.left, slot.right)
             if not left:  # counter gone or x0: everything is deployed
-                return LINE_STEPS[step]
+                return LINE_STEPS[step], slot.count
             if left < remaining:
                 landed = LINE_STEPS[step]
             elif whole or used >= len(SPOTS):
@@ -724,7 +779,7 @@ class Bot:
                 step, used = step + 1, 0
             remaining = left
         self.log(f"{remaining} troops could not be deployed.", "warn")
-        return landed
+        return landed, slot.count - remaining
 
     def _deploy_hero(self, shot, slot, sides, outward: float, spots: list) -> bool:
         """Places one hero. The card is only tapped again while it is clearly still waiting,

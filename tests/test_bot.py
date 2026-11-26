@@ -135,7 +135,7 @@ def test_most_loot_deploys_next_to_the_storages(ocr, monkeypatch, found, sides):
 def test_game_is_not_relaunched_when_the_village_is_open(ocr):
     game = FakeGame(loots=[(900_000, 900_000, 0)])
     bot, _, log = run_bot(game, ocr)
-    assert not bot.last_error and "launch" not in game.events, log
+    assert not bot.last_error and "launch" not in game.events and "stop" not in game.events, log
     assert game.events.count("zoom:home") == 1
 
 
@@ -179,6 +179,42 @@ def test_builder_list_is_closed_and_zoomed_out_after_walls(ocr):
     # The list ignores the back key, so only its X leads home; then the camera is zoomed out again
     assert game.events[:first_attack].count("zoom:home") == 2, game.events
     assert "Walls finished: 5 upgraded. Back to attacking." in log
+
+
+def test_camera_is_checked_and_moved_out_after_walls(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 9_000_000))
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and not game.close_up and stats.session["attacks"] == 1, log
+    assert "stop" not in game.events and not any("Zoom check" in line for line in log), log
+    assert game.deployed == {"dragon": 14}, log
+
+
+def test_game_that_ignores_zooming_after_walls_is_restarted(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 9_000_000))
+    game.stuck_after_walls = True
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["attacks"] == 1, (game.events, log)
+    assert any(line.startswith("Zooming out has no effect, restarting the game.") for line in log), log
+    assert game.events.index("stop") < game.events.index("card:dragon"), game.events
+    assert game.deployed == {"dragon": 14} and not game.close_up and "redzone" not in game.events, log
+
+
+def test_mouse_wheel_is_used_when_the_gesture_does_nothing(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.zoom_ok, game.close_up = {"wheel"}, True
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error and game.zoom_method == "wheel" and "stop" not in game.events, log
+    assert "Zooming with the mouse wheel from now on." in log and game.deployed == {"dragon": 14}, log
+
+
+def test_battle_is_left_at_once_when_nothing_can_be_placed(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.zoom_ok, game.close_up = set(), True  # nothing moves the camera
+    bot, stats, log = run_bot(game, ocr, heroes=True)
+    assert game.deployed == {} and "card:king" not in game.events and "card:rage" not in game.events, log
+    assert game.events.count("end") == 5, game.events
+    assert bot.last_error == "No attack was possible five times in a row.", log
+    assert any("Nothing can be placed" in line for line in log)
 
 
 def test_pc_is_kept_awake_only_while_the_bot_runs(ocr, monkeypatch):

@@ -42,7 +42,7 @@ above. The file is not signed, so Windows may show "Windows protected your PC": 
 | Deploy Heroes Automatically | **Off by default.** Hero cards are never touched while off. |
 | Use Siege Machines | Deploys the siege machine card. |
 | Use Event Troops | Deploys cards with the event badge, plus icons saved with "Capture Event Troop". |
-| Auto Upgrade Walls (Beta) | Once gold or elixir reaches half of Max Storage Capacity: opens the builder list, picks a wall, upgrades it with gold or elixir and repeats until no wall in the list can be paid or both resources are below 1M (at most 15 per visit). Then it closes the list, zooms out and goes on attacking. It can use up most of both storages. Needs a free builder. Never uses wall rings and never confirms gem dialogs. |
+| Auto Upgrade Walls (Beta) | Once gold or elixir reaches half of Max Storage Capacity: opens the builder list, picks a wall, upgrades it with gold or elixir and repeats until no wall in the list can be paid or both resources are below 1M (at most 15 per visit). Then it closes the list, zooms out and goes on attacking; if the camera does not move, it restarts the game first. It can use up most of both storages. Needs a free builder. Never uses wall rings and never confirms gem dialogs. |
 | Stop When Storage Is Full | Stops once gold and elixir are full. |
 | Donate Troops Before Attack (Beta) | Answers donation requests in the clan chat. Never spends gems. |
 

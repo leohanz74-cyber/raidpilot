@@ -84,6 +84,18 @@ def _pick(line_value, box_value):
     return line_value
 
 
+def view_change(first: np.ndarray, second: np.ndarray) -> float:
+    """How different the middle of two pictures is (0 = the same). Things moving in the village stay
+    below 10, zooming in or out gives far more."""
+    def middle(image):
+        height, width = image.shape[:2]
+        part = image[int(height * 0.2):int(height * 0.75), int(width * 0.2):int(width * 0.8)]
+        grey = cv2.cvtColor(part, cv2.COLOR_BGR2GRAY)
+        return cv2.resize(grey, (160, 90), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+    return float(np.abs(middle(first) - middle(second)).mean())
+
+
 class Screen:
     def __init__(self, image, ocr):
         self.image = image
