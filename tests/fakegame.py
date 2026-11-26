@@ -19,6 +19,9 @@ class FakeGame:
         # walls: [price, how many]; the list scrolls; refuse = currencies the game says are not enough
         self.walls = [[4_800_000, 2], [4_000_000, 3]]
         self.scroll = 0
+        self.open_at = 0          # where the builder list stands when it is opened
+        self.deepest = 0
+        self.after_walls = []     # buildings listed below the walls
         self.wall = None
         self.currency = None
         self.refuse = set()
@@ -89,15 +92,14 @@ class FakeGame:
             self.state = "dialog"
         elif self.state == "dialog":
             self.state = "panel"
-        elif self.state == "panel":
-            self.state = "home"
-            self.wall = None
+        # like the real game: the builder list ignores the back key
 
     def swipe(self, x1, y1, x2, y2, duration=0):
         self.events.append("swipe")
         if self.state == "panel" and x1 > 1170:
             rows = len(self.rows())
             self.scroll = max(0, min(max(0, rows - 10), self.scroll + (4 if y2 < y1 else -4)))
+            self.deepest = max(self.deepest, self.scroll)
 
     def rows(self):
         """(name, price or None, wall index or None) of the builder list."""
@@ -105,7 +107,7 @@ class FakeGame:
         for index, (price, amount) in enumerate(self.walls):
             if amount:
                 rows.append((f"Wall x {amount}" if amount > 1 else "Wall", price, index))
-        return rows
+        return rows + [(name, 90_000_000, None) for name in self.after_walls]
 
     def visible_rows(self):
         return [(90 + (i - self.scroll) * ROW, row) for i, row in enumerate(self.rows())
@@ -151,10 +153,15 @@ class FakeGame:
             self.menu_claim = False
         elif self.state == "home" and near(1455, 696, 60):
             self.state = "panel"
-            self.scroll = 0
+            self.scroll = self.open_at
             self.wall = None
+        elif self.state == "dialog" and near(1412, 70, 32, 32):
+            self.state = "panel"
         elif self.state == "panel":
-            if x >= 1170:
+            if near(1573, 28, 24, 24):
+                self.state = "home"
+                self.wall = None
+            elif x >= 1170:
                 for row_y, (_, _, wall) in self.visible_rows():
                     if wall is not None and abs(y - row_y - 8) <= 30:
                         self.wall = wall
@@ -272,6 +279,14 @@ class FakeGame:
             cv2.rectangle(image, (x - w // 2, y - h // 2), (x + w // 2, y + h // 2), color, -1)
             text(value, x, y, scale, center=True)
 
+        def close(x, y, size):
+            half = size // 2
+            cv2.rectangle(image, (x - half, y - half), (x + half, y + half), (40, 40, 225), -1)
+            reach = int(size * 0.28)
+            for sign in (1, -1):
+                cv2.line(image, (x - reach, y - sign * reach), (x + reach, y + sign * reach), (255, 255, 255),
+                         max(5, size // 7), cv2.LINE_AA)
+
         spaced = lambda n: f"{n:,}".replace(",", " ")
         if self.state in ("home", "welcome", "menu", "army"):
             text(spaced(self.storage[0]), 1365, 55, 0.9)
@@ -284,6 +299,8 @@ class FakeGame:
             text(spaced(self.storage[1]), 930, 118, 0.9)
             cv2.rectangle(image, (1172, 0), (1600, 900), (80, 95, 120), -1)
             text("Buildings & Heroes", 1379, 26, 0.8, center=True)
+            if self.state == "panel":
+                close(1573, 28, 38)
             for y, (name, price, wall) in self.visible_rows():
                 cv2.rectangle(image, (1180, y - 28), (1590, y + 38), (110, 140, 180), -1)
                 text(name, 1230, y + 8, 0.7)
@@ -304,6 +321,8 @@ class FakeGame:
             text(f"Upgrade Wall to Level {level}?", 791, 57, 1.3, center=True)
             cv2.rectangle(image, (750, 150), (1420, 700), (245, 245, 245), -1)
             cv2.rectangle(image, (985, 725), (1245, 835), (60, 200, 130), -1)
+            if self.state == "dialog":
+                close(1412, 70, 60)
             text("Confirm", 1115, 755, 0.9, center=True)
             text(spaced(price), 1090, 790, 0.9, center=True)
             cv2.circle(image, (1195, 790), 22, (40, 190, 250) if self.currency == "gold" else (220, 60, 200), -1)

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from raidpilot import army, layout, settings, storages, store, templates, updater, zoom
+from raidpilot import army, layout, power, settings, storages, store, templates, updater, zoom
 from raidpilot.adb import Adb, decode_raw
 from raidpilot.api import Api
 from raidpilot.mumu import Mumu, MumuError
@@ -125,6 +125,31 @@ def test_troop_bar_roles(ocr):
     assert [s.index for s in army.choose_spells(shot.image, slots, "rage")] == [6]
     assert army.choose_spells(shot.image, slots, "none") == []
     assert shot.loot() == (900_000, 120_000, 800)
+
+
+def _bar(background):
+    """A troop bar with four cards over a background of the given brightness."""
+    image = np.full((900, 1600, 3), background, np.uint8)
+    for left, color in ((121, (230, 170, 90)), (257, (200, 60, 160)), (379, (60, 60, 220)), (512, (220, 90, 200))):
+        cv2.rectangle(image, (left, 745), (left + 110, 885), (60, 30, 20), -1)
+        cv2.rectangle(image, (left + 3, 748), (left + 107, 882), color, -1)
+    return image
+
+
+@pytest.mark.parametrize("background", [(70, 60, 50), (150, 160, 150)], ids=["dark", "bright"])
+def test_cards_are_found_over_dark_and_bright_villages(background):
+    image = _bar(background)
+    if background[0] > 118:
+        image[720:900, :60] = (60, 60, 60)  # the bar gets darker towards the left
+    cards = army.find_cards(image)
+    assert len(cards) == 4, cards
+    for (left, right), expected in zip(cards, (121, 257, 379, 512)):
+        assert abs(left - expected) <= 6 and abs(right - expected - 110) <= 6, cards
+
+
+def test_windows_is_only_kept_awake_on_windows():
+    assert power.keep_awake(True) is False and power.keep_awake(False) is False
+    power.lower_priority()
 
 
 def test_captured_event_troop_is_recognised(ocr):

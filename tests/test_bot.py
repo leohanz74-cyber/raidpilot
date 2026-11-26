@@ -131,6 +131,64 @@ def test_gem_offer_is_closed_and_the_other_resource_used(ocr):
     assert stats.session["walls"] == 2 and stats.session["attacks"] == 1
 
 
+def test_builder_list_is_closed_and_zoomed_out_after_walls(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 9_000_000))
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["attacks"] == 1, log
+    first_attack = game.events.index("card:dragon")
+    # The list ignores the back key, so only its X leads home; then the camera is zoomed out again
+    assert game.events[:first_attack].count("zoom:home") == 2, game.events
+    assert "Walls finished: 5 upgraded. Back to attacking." in log
+
+
+def test_pc_is_kept_awake_only_while_the_bot_runs(ocr, monkeypatch):
+    from raidpilot import power
+
+    calls = []
+    monkeypatch.setattr(power, "keep_awake", lambda on: calls.append(on) or True)
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    bot, _, log = run_bot(game, ocr, spell="none")
+    assert calls == [True, False] and any("stays awake" in line for line in log), (calls, log)
+
+
+def test_walls_stop_when_nothing_is_affordable(ocr):
+    # After one wall both storages are below one million: leave the menu without searching on
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(16_000_000, 600_000))
+    game.walls = [[15_400_000, 3]]
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["walls"] == 1 and stats.session["attacks"] == 1, (game.events, log)
+    bought = game.events.index("wall:gold")
+    assert "swipe" not in game.events[bought:], game.events
+
+
+def test_menu_is_left_when_every_wall_costs_too_much(ocr):
+    # More than a million left, but less than any wall: search the whole list once, then go on attacking
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(16_000_000, 2_000_000))
+    game.walls = [[18_000_000, 3]]
+    game.after_walls = ["Archer Queen", "Grand Warden"]
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error, log
+    assert stats.session["walls"] == 0 and stats.session["attacks"] == 1, (game.events, log)
+    assert not [e for e in game.events if e.startswith("wall:")]
+    assert "No affordable wall was found in the builder list." in log
+
+
+def test_walls_found_when_the_list_opens_below_them(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 1_000_000))
+    game.after_walls = [f"Hero Hall {n}" for n in range(12)]
+    game.open_at = len(game.rows()) - 10
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["walls"] >= 1 and stats.session["attacks"] == 1, (game.events, log)
+
+
+def test_open_builder_list_is_closed_on_the_way_home(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.state = "panel"  # left open, for example by stopping the bot in the middle of an upgrade
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error and stats.session["attacks"] == 1, (game.events, log)
+    assert "stop" not in game.events, "the list must be closed, not the game restarted"
+
+
 def test_no_free_builder_skips_walls(ocr):
     game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(20_000_000, 1_000_000))
     game.builders = 0

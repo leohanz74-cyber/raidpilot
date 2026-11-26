@@ -24,6 +24,44 @@ class Slot:
     role: str = "troop"       # troop, event, siege, hero, spell
 
 
+def edge_share(image):
+    """For every column of the troop bar: over how much of its height there is a sharp edge."""
+    height, width = image.shape[:2]
+    strip = image[int(.838 * height):int(.968 * height)].astype(np.int16)
+    step = max(1, round(width / 800))
+    jump = np.abs(strip[:, 2 * step:] - strip[:, :-2 * step]).max(axis=2)
+    share = np.zeros(width)
+    share[step:-step] = (jump > 22).mean(axis=0)
+    return share
+
+
+def card_edges(share) -> list:
+    """Neighbouring columns with an edge over (almost) the whole height, as [first, last]."""
+    edges = []
+    for x in np.flatnonzero(share > 0.8):
+        if edges and x - edges[-1][1] <= 3:
+            edges[-1][1] = int(x)
+        else:
+            edges.append([int(x), int(x)])
+    return edges
+
+
+def cards_between_edges(share, edges: list, bright) -> list:
+    """Cards found by their outlines: two edges one card width apart with a bright inside."""
+    width = len(share)
+    low, typical, high = (int(v * width) for v in (0.064, 0.069, 0.073))
+    columns = [x for first, last in edges for x in range(first, last + 1)]
+    pairs = [(left, right) for left in columns for right in columns if low <= right - left <= high]
+    # The clearest outlines first, then the width that fits best
+    pairs.sort(key=lambda p: (-round(float(share[p[0]] + share[p[1]]) * 20), abs(p[1] - p[0] - typical)))
+    cards = []
+    for left, right in pairs:
+        overlaps = any(left < other[1] - 3 and right > other[0] + 3 for other in cards)
+        if not overlaps and bright[left + 6:right - 6].mean() > 0.7:
+            cards.append((left, right))
+    return sorted(cards)
+
+
 def find_cards(image) -> list:
     """(left, right) of every troop card. Cards are bright, empty places in the bar are dim."""
     height, width = image.shape[:2]
@@ -40,12 +78,21 @@ def find_cards(image) -> list:
             else:
                 runs.append([start, x])
             start = None
+    runs = [run for run in runs if run[1] - run[0] >= 0.045 * width]
+    # Over a bright village the background shines through the bar and merges with the cards:
+    # then a bright stretch does not begin and end at the outline of a card, and the outlines decide.
+    share = edge_share(image)
+    edges = card_edges(share)
+    reach = 0.006 * width
+    outline = lambda x: any(first - reach <= x <= last + reach for first, last in edges)
+    if not all(outline(left) and outline(right) for left, right in runs):
+        outlined = cards_between_edges(share, edges, bright)
+        if outlined:
+            return outlined[:14]
     typical = 0.068 * width
     cards = []
     for left, right in runs:
         span = right - left
-        if span < 0.045 * width:
-            continue
         parts = max(1, round(span / (typical * 1.06)))
         cards.extend((int(left + span * i / parts), int(left + span * (i + 1) / parts)) for i in range(parts))
     return cards[:14]

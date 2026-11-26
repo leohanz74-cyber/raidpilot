@@ -4,6 +4,7 @@ import unicodedata
 from difflib import SequenceMatcher
 
 import cv2
+import numpy as np
 
 from . import layout
 from .ocr import Word
@@ -167,6 +168,27 @@ class Screen:
         if any(not any(known in normalize(w.text) for known in layout.CHEST_WORDS) for w in self.readable_words(popup)):
             return False
         return not any(self.button(name) for name in ("home_battle", "home_build", "end_battle", "return_home"))
+
+    def close_button(self):
+        """Position of the red button with the white cross that closes a window, or None."""
+        top = self.image[:int(layout.CLOSE_BELOW * self.height)]
+        hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+        red = cv2.inRange(hsv, (0, 150, 120), (7, 255, 255)) | cv2.inRange(hsv, (170, 150, 120), (180, 255, 255))
+        white = cv2.inRange(hsv, (0, 0, 190), (180, 70, 255))
+        count, _, boxes, _ = cv2.connectedComponentsWithStats(
+            cv2.morphologyEx(red, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)))
+        found = []
+        for x, y, w, h, _ in boxes[1:count]:
+            if not (0.020 * self.width <= w <= 0.055 * self.width and 0.8 <= w / h <= 1.25):
+                continue
+            cross = cv2.resize(white[y:y + h, x:x + w], (24, 24)) > 127
+            # White along both diagonals, but not in the middle of the four edges
+            diagonals = np.mean([cross[k - 1:k + 2, c - 1:c + 2].any() for k in range(7, 17) for c in (k, 23 - k)])
+            edges = np.mean([cross[3:6, 10:14].mean(), cross[18:21, 10:14].mean(),
+                             cross[10:14, 3:6].mean(), cross[10:14, 18:21].mean()])
+            if diagonals >= 0.8 and edges <= 0.15:
+                found.append((int(w * h), (int(x + w // 2), int(y + h // 2))))
+        return max(found)[1] if found else None  # the largest belongs to the window on top
 
     def contains_word(self, needles, region=(0, 0, 1, 1)) -> bool:
         for word in self.words(region):

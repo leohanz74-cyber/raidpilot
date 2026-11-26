@@ -3,7 +3,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import store
+from . import power, store
 from .api import SIZE, Api
 
 
@@ -14,7 +14,11 @@ def ui_path() -> str:
 
 def main() -> None:
     try:
+        import cv2
         import webview
+
+        power.lower_priority()
+        cv2.setNumThreads(2)  # like the text recognition: leave the processor to the emulator
 
         api = Api()
         width, height = SIZE

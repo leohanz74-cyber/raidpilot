@@ -72,8 +72,12 @@ POINTS = {
     "chat_open": (0.036, 0.500),
     "chat_close": (0.385, 0.455),
     "close_window": (0.966, 0.090),
+    "list_close": (0.983, 0.030),   # the X of the builder list
     "chest": (0.470, 0.560),
 }
+
+# Close buttons (red with a white cross) are only looked for in this upper part of the screen
+CLOSE_BELOW = 0.45
 
 # Deployment lines just outside the red boundary when the map is zoomed out completely
 SIDES = {

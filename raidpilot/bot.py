@@ -8,7 +8,7 @@ import traceback
 
 import numpy as np
 
-from . import army, layout, notify, screen as screen_mod, storages
+from . import army, layout, notify, power, screen as screen_mod, storages
 from .adb import AdbError
 from .mumu import MumuError
 
@@ -19,6 +19,12 @@ LOOT_DONE = 0.05          # end once only this share of the loot is left ...
 LOOT_DONE_AFTER = 20      # ... and at least this many seconds have passed
 SPELL_DELAY = 7           # seconds after the first troop until the first half of the spells
 SPELL_WAVE_GAP = 8        # seconds between the two halves
+# A calm, fixed pace: fewer pictures to analyse, and a lagging emulator can keep up
+BATTLE_LOOK = 1.5         # seconds between two looks at a running battle
+BUTTON_LOOK = 0.5         # seconds between two looks while waiting for a button
+TAP_PAUSE = 0.25          # after choosing a card or casting a spell
+BATCH_PAUSE = 0.2         # between two groups of troop taps
+COUNT_PAUSE = 0.7         # until the counter of a card shows what has landed
 TROOP_LOOKS = 5           # attempts to read the troop bar before a battle is given up
 ABILITY_DELAY = 12        # seconds after the heroes are placed
 WARDEN_GAP = 5            # the Grand Warden's ability comes this much after all others
@@ -30,6 +36,7 @@ BOOT_TIMEOUT = 240
 WALLS_PER_VISIT = 15
 WALL_SCROLLS = 22         # swipes through the builder list while looking for walls
 WALL_TRIGGER = 0.5        # walls are upgraded once a storage is this full
+WALL_FLOOR = 1_000_000    # after buying, stop when gold and elixir are both below this
 WALL_PAUSE = 5            # village visits without a new try after walls did not work
 REWARD_TAPS = 30          # taps through reward screens before giving up
 
@@ -108,6 +115,8 @@ class Bot:
         self._wall_pause = 0
         adb_errors = 0
         reason = "Stopped"
+        if power.keep_awake(True):
+            self.log("The PC stays awake while the bot runs. The screen may turn off.")
         try:
             self._connect(self.get_settings())
             self._start_game()
@@ -139,12 +148,23 @@ class Bot:
             self.log(reason, "error")
             self.log(traceback.format_exc(), "error")
         finally:
+            power.keep_awake(False)
             self.stats.stop()
             self.status = "Error" if self.last_error else "Ready"
             self.log("Bot stopped.")
             self._report(f"RaidPilot stopped: {reason}")
 
     # ---------- helpers ----------
+    def _dismiss(self, shot) -> None:
+        """Closes the window on top: its red X, or the back key if it has none.
+        (The builder list ignores the back key.)"""
+        close = shot.close_button()
+        if close:
+            self._tap(close, 0.8)
+        else:
+            self.adb.back()
+            self._wait(0.8)
+
     def _check_stop(self) -> None:
         if self._stop.is_set():
             raise Stop()
@@ -224,7 +244,7 @@ class Bot:
         self.status = before
         return not self._reward_stuck
 
-    def _wait_for(self, names, timeout: float, interval: float = 0.3, rewards: bool = False):
+    def _wait_for(self, names, timeout: float, interval: float = BUTTON_LOOK, rewards: bool = False):
         """Waits for one of the buttons. Handles dialogs that can appear while an attack starts.
         With rewards=True a reward screen is collected too and reported as "reward"."""
         began = self.clock()
@@ -250,7 +270,7 @@ class Bot:
     def _wait_gone(self, name: str, timeout: float) -> bool:
         end = self.clock() + timeout
         while self.clock() < end:
-            self._wait(0.25)
+            self._wait(BUTTON_LOOK)
             if not self._shot().button(name):
                 return True
         return False
@@ -399,7 +419,7 @@ class Bot:
                 self.adb.launch_game()
                 self._wait(4)
             elif unknown in (12, 17, 22):
-                self.adb.back()          # closes open windows
+                self._dismiss(shot)      # closes open windows
             elif unknown == 26:
                 self._tap(shot.px(layout.POINTS["close_window"]))
             elif unknown >= 30:
@@ -433,7 +453,10 @@ class Bot:
         if self._collect_rewards(shot):  # before the gem check: a reward may well be gems
             return True
         if shot.shows_gems():
-            self.adb.back()
+            self._dismiss(shot)
+            return True
+        if shot.upgrade_panel():  # the builder list, left open
+            self._dismiss(shot)
             return True
         name, point = self._find_any(shot, ("reload", "return_home", "okay"))
         if name:
@@ -477,9 +500,10 @@ class Bot:
         elif settings["walls"]:
             if self._wall_pause:
                 self._wall_pause -= 1
-            else:
-                self._upgrade_walls(settings)
-                values = self._go_home().storage() or values
+            elif self._upgrade_walls(settings):
+                home = self._go_home()
+                values = home.storage() or values
+                self._zoom_out()  # the camera moved to the walls
         if settings["stop_full"] and min(values) >= capacity * 0.98:
             raise Done("Storages are full.")
 
@@ -662,12 +686,14 @@ class Bot:
         remaining = slot.count
         step = LINE_STEPS.index(outward) if outward in LINE_STEPS else 0
         for _ in range(10):
-            self._tap((slot.x, slot.y), 0.15)
+            self._tap((slot.x, slot.y), TAP_PAUSE)
             points = [shot.px(p) for p in army.line_points(sides, min(remaining, 40), LINE_STEPS[step], span)]
             for first in range(0, len(points), 8):
+                if first:
+                    self._wait(BATCH_PAUSE)
                 self._check_stop()
                 self.adb.tap_many(points[first:first + 8])
-            self._wait(0.35)
+            self._wait(COUNT_PAUSE)
             left = army.card_count(self._shot(), slot.left, slot.right)
             if left is None:  # look once more before believing it
                 self._wait(0.4)
@@ -713,9 +739,9 @@ class Bot:
     def _cast(self, wave: list) -> None:
         """wave: [(spell card, positions)]"""
         for slot, points in wave:
-            self._tap((slot.x, slot.y), 0.15)
+            self._tap((slot.x, slot.y), TAP_PAUSE)
             for point in points:
-                self._tap(point, 0.15)
+                self._tap(point, TAP_PAUSE)
 
     def _use_planned(self, plan: list) -> None:
         """Runs what is due: hero abilities (cards with a log text) and later spell waves."""
@@ -738,14 +764,14 @@ class Bot:
         self._counted = False
         try:
             while True:
-                self._wait(1.0)
+                self._wait(BATTLE_LOOK)
                 shot = self._shot()
                 leave = shot.button("end_battle", thorough=lost >= 2)
                 if not leave:
                     if shot.button("return_home"):
                         break
                     lost += 1
-                    if lost >= 12:
+                    if lost >= 8:
                         self.failures += 1
                         self.log("The battle screen disappeared.", "warn")
                         return
@@ -819,23 +845,26 @@ class Bot:
             self._tap(point, 0.8)
 
     # ---------- walls ----------
-    def _upgrade_walls(self, settings) -> None:
+    def _upgrade_walls(self, settings) -> bool:
         """Builder list -> a wall line -> "Upgrade" (gold or elixir) -> "Confirm", wall after wall,
-        until the list holds nothing affordable. Gem offers are closed, never confirmed."""
+        until no wall can be paid any more. Gem offers are closed, never confirmed.
+        True if the builder list was opened."""
         shot = self._go_home()
         storage = shot.storage()
         if not storage or max(storage) < settings["max_storage"] * WALL_TRIGGER:
-            return
+            return False
         builder = shot.builder_button()
         if builder and builder[0] == 0:
             self._warn_once("builder", "No free builder: the game needs one for walls, skipping for now.")
-            return
+            return False
         self.status = "Upgrading walls…"
         self.log(f"Storage over half full ({notify.short(storage[0])} gold, {notify.short(storage[1])} "
                  "elixir): upgrading walls.")
         money = {"gold": storage[0], "elixir": storage[1]}
         done, problem, skipped = 0, "No affordable wall was found in the builder list.", set()
         while done < WALLS_PER_VISIT and len(skipped) < 4:
+            if done and max(money.values()) < WALL_FLOOR:
+                break  # too little left for another wall
             entry = self._find_wall_entry(money, skipped)
             if entry is None:
                 break
@@ -848,10 +877,11 @@ class Bot:
             done += 1
         self._close_builder_list()
         if done:
-            self.log(f"Walls finished: {done} upgraded.", "good")
+            self.log(f"Walls finished: {done} upgraded. Back to attacking.", "good")
         else:
             self._wall_pause = WALL_PAUSE  # do not lose time on it before every attack
             self._warn_once("walls", problem or "No wall could be upgraded.")
+        return True
 
     def _open_builder_list(self):
         """The picture with the open builder list, or None."""
@@ -876,8 +906,11 @@ class Bot:
         if shot is None:
             return None
         previous, unchanged = None, 0
-        for _ in range(WALL_SCROLLS):
-            for price, point in shot.wall_entries():
+        seen, rewound = False, False
+        for _ in range(2 * WALL_SCROLLS):
+            entries = shot.wall_entries()
+            seen = seen or bool(entries)
+            for price, point in entries:
                 if price not in skipped and (price is None or price <= max(money.values())):
                     return price, point
             panel = shot.upgrade_panel()
@@ -887,14 +920,21 @@ class Bot:
             picture = shot.crop((x - 0.12, 0.15, x + 0.12, 0.85))[0][::6, ::6].astype(np.int16)
             if previous is not None and np.abs(picture - previous).mean() < 1.5:
                 unchanged += 1
-                if unchanged >= 2:  # the end of the list
-                    break
             else:
                 unchanged = 0
             previous = picture
-            # A slow swipe: a fast one would fling the list past the walls
-            self.adb.swipe(*shot.px((x, 0.74)), *shot.px((x, 0.42)), 700)
-            self._wait(0.7)
+            if unchanged >= 2:  # the end of the list
+                if seen or rewound:
+                    break
+                # The list was not at its top when the search began: go up and look through it again
+                rewound, previous, unchanged = True, None, 0
+                for _ in range(8):
+                    self.adb.swipe(*shot.px((x, 0.30)), *shot.px((x, 0.80)), 200)
+                    self._wait(0.4)
+            else:
+                # A slow swipe: a fast one would fling the list past the walls
+                self.adb.swipe(*shot.px((x, 0.74)), *shot.px((x, 0.42)), 700)
+                self._wait(0.7)
             shot = self._shot()
         self._capture("walls_not_found", shot)
         return None
@@ -932,30 +972,28 @@ class Bot:
                 dialog = shot.wall_dialog()
             if not dialog:
                 self._capture("walls_3_confirm", shot)
-                self.adb.back()
+                self._dismiss(shot)
                 return "The wall window did not open (nothing was bought)."
             confirm, cost, currency = dialog
             currency = currency or name
             cost = cost or price
             tried.add(currency)
             if shot.shows_gems() or (cost and money[currency] < cost):
-                self.adb.back()
-                self._wait(0.8)
+                self._dismiss(shot)
                 continue
             self._capture("walls_3_confirm", shot)
             self._tap(confirm, 1.5)
             shot = self._shot()
             if shot.shows_gems():  # "Need more gold?": close the offer and the window
-                self.adb.back()
-                self._wait(0.8)
-                if self._shot().wall_dialog():
-                    self.adb.back()
-                    self._wait(0.8)
+                self._dismiss(shot)
+                shot = self._shot()
+                if shot.wall_dialog():
+                    self._dismiss(shot)
                 money[currency] = min(money[currency], (cost or 1) - 1)
                 continue
             if shot.wall_dialog():
                 self._capture("walls_4_stuck", shot)
-                self.adb.back()
+                self._dismiss(shot)
                 return "The wall upgrade did not go through."
             money[currency] = max(0, money[currency] - (cost or 0))
             self.stats.add(walls=1)
@@ -964,9 +1002,16 @@ class Bot:
         return NOT_ENOUGH
 
     def _close_builder_list(self) -> None:
-        if self._shot().upgrade_panel():
-            self.adb.back()
-            self._wait(0.8)
+        """Closes whatever the wall upgrade left open."""
+        for attempt in range(5):
+            shot = self._shot()
+            if not (shot.upgrade_panel() or shot.wall_dialog()):
+                return
+            if attempt < 3:
+                self._dismiss(shot)
+            else:  # the X was not found or did not react
+                self._tap(shot.px(layout.POINTS["list_close"]), 0.8)
+        self._capture("walls_stuck", self._shot())
 
     # ---------- donations ----------
     def _donate(self) -> None:
