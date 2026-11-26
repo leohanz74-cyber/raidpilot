@@ -19,6 +19,7 @@ from .version import VERSION
 
 SIZE = (440, 760)
 PROFILE = "profile.json"
+UPDATES = "update.json"
 
 
 def api_call(func):
@@ -49,6 +50,8 @@ class Api:
         self._frame = None
         self._window = None
         self._update = None
+        self._auto = False          # install the update found at the start without asking
+        self._installing = False
         self._log(f"RaidPilot {VERSION} started.")
         threading.Thread(target=self._warm_up, daemon=True).start()
         if check_updates:
@@ -88,10 +91,14 @@ class Api:
         return self._update["version"]
 
     def _look_for_update(self) -> None:
+        """Runs once at the start. Only this finding is installed on its own, and each version only
+        once: an update that does not take must not restart the program again and again."""
         try:
-            self._find_update()
+            version = self._find_update()
         except updater.UpdateError as exc:
             self._log(f"Update check failed: {exc}", "warn")
+            return
+        self._auto = bool(version) and store.load(UPDATES, {}).get("tried") != version
 
     def _player(self) -> str:
         return store.load(PROFILE, {}).get("player", "")
@@ -213,12 +220,16 @@ class Api:
     # ---------- bot ----------
     @api_call
     def start(self):
-        if self._running():
-            return
-        self._bot = Bot(self._adb, self._ocr, settings.load, self._stats, self._log,
-                        emulator=self._mumu, on_player=self._save_player, on_capture=self._capture)
-        self._log("Bot started.", "good")
-        self._bot.start()
+        with self._lock:
+            if self._installing:
+                raise ValueError("An update is being installed, one moment.")
+            if self._running():
+                return
+            self._auto = False  # from now on only a click installs an update
+            self._bot = Bot(self._adb, self._ocr, settings.load, self._stats, self._log,
+                            emulator=self._mumu, on_player=self._save_player, on_capture=self._capture)
+            self._log("Bot started.", "good")
+            self._bot.start()
 
     @api_call
     def stop(self):
@@ -240,6 +251,7 @@ class Api:
             "log": self._log.since(int(last_id)),
             "generation": self._log.generation,
             "update": self._update["version"] if self._update else None,
+            "auto_update": self._auto and not self._running(),
         }
 
     @api_call
@@ -255,11 +267,25 @@ class Api:
         return {"update": version}
 
     @api_call
-    def install_update(self):
-        if not self._update:
-            raise ValueError("There is no update.")
-        self._shutdown()
-        result = updater.install(self._update)
+    def install_update(self, auto=False):
+        """auto: started by the window itself right after the start; never stops a running bot."""
+        with self._lock:
+            update = self._update
+            if auto and (not self._auto or self._running()):
+                return {"result": None}
+            if not update or self._installing:
+                raise ValueError("There is no update.")
+            self._auto = False
+            self._installing = True
+        try:
+            self._shutdown()
+            self._log(f"Installing update {update['version']}…")
+            result = updater.install(
+                update, downloaded=lambda: store.save(UPDATES, {"tried": update["version"]}) if auto else None)
+        except Exception as exc:
+            self._installing = False
+            self._log(f"The update was not installed: {exc}", "warn")
+            raise
         self._update = None
         threading.Timer(1.5, self._restart, args=(result == "restart",)).start()
         return {"result": result}

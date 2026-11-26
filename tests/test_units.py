@@ -7,9 +7,10 @@ import cv2
 import numpy as np
 import pytest
 
-from raidpilot import army, layout, power, settings, storages, store, templates, updater, zoom
+from raidpilot import army, layout, power, selftest, settings, storages, store, templates, updater, zoom
 from raidpilot.adb import Adb, decode_raw
 from raidpilot.api import Api
+from raidpilot.bot import Bot
 from raidpilot.mumu import Mumu, MumuError
 from raidpilot.screen import Screen, label_matches, parse_number
 
@@ -231,6 +232,77 @@ def test_window_api(ocr):
     assert not api.connect_discord("https://example.com")["ok"]
     poll = api.poll()
     assert poll["ok"] and not poll["running"] and poll["lifetime"]["attacks"] == 0
+
+
+def test_update_at_start_installs_itself_once(ocr, monkeypatch):
+    installed = []
+
+    def install(info, downloaded=None):
+        downloaded()
+        installed.append(info["version"])
+        return "exit"
+
+    monkeypatch.setattr(updater, "check", lambda: {"version": "9.0.0", "assets": []})
+    monkeypatch.setattr(updater, "install", install)
+    api = Api(adb=FakeGame(), ocr=ocr, emulator=None, check_updates=False)
+    assert api.poll()["auto_update"] is False
+    api._look_for_update()
+    assert api.poll()["auto_update"] is True
+    assert api.install_update(True) == {"ok": True, "result": "exit"} and installed == ["9.0.0"]
+    assert api.start()["error"] == "An update is being installed, one moment."
+    # If the program starts again and is still old, it offers the button and does not loop
+    again = Api(adb=FakeGame(), ocr=ocr, emulator=None, check_updates=False)
+    again._look_for_update()
+    assert again.poll()["auto_update"] is False and again.poll()["update"] == "9.0.0"
+    assert again.install_update(True)["result"] is None and installed == ["9.0.0"]
+    assert again.install_update()["result"] == "exit" and installed == ["9.0.0", "9.0.0"]
+
+
+def test_update_never_interrupts_a_running_bot(ocr, monkeypatch):
+    monkeypatch.setattr(updater, "check", lambda: {"version": "9.0.0", "assets": []})
+    monkeypatch.setattr(updater, "install", lambda *a, **k: pytest.fail("must not install"))
+    api = Api(adb=FakeGame(), ocr=ocr, emulator=None, check_updates=False)
+    api._look_for_update()
+    monkeypatch.setattr(api, "_running", lambda: True)
+    assert api.poll()["auto_update"] is False and api.install_update(True)["result"] is None
+    # Once START was pressed, only a click installs it, also after the bot has stopped
+    monkeypatch.setattr(api, "_running", lambda: False)
+    monkeypatch.setattr(Bot, "start", lambda self: None)
+    api.start()
+    assert api.poll()["auto_update"] is False and api.poll()["update"] == "9.0.0"
+
+
+def test_frozen_update_runs_the_installer(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updater.sys, "platform", "linux")
+    monkeypatch.setattr(updater, "download", lambda asset: b"setup")
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda command, **options: calls.append((command, options)))
+    info = {"version": "9.0.0", "assets": [{"name": "RaidPilot-9.0.0-Setup.exe", "url": "u"},
+                                           {"name": "RaidPilot-source.zip", "url": "u"}]}
+    assert updater.install(info, downloaded=lambda: calls.append("downloaded")) == "exit"
+    assert calls[0] == "downloaded"
+    command, options = calls[1]
+    assert command[0].endswith("RaidPilot-9.0.0-Setup.exe") and "/SILENT" in command
+    assert options["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+
+def test_failed_update_leaves_the_app_usable(ocr, monkeypatch):
+    def install(info, downloaded=None):
+        raise updater.UpdateError("Download failed.")
+
+    monkeypatch.setattr(updater, "check", lambda: {"version": "9.0.0", "assets": []})
+    monkeypatch.setattr(updater, "install", install)
+    api = Api(adb=FakeGame(), ocr=ocr, emulator=None, check_updates=False)
+    api._look_for_update()
+    assert api.install_update(True) == {"ok": False, "error": "Download failed."}
+    assert not api._installing and api.poll()["auto_update"] is False and api.poll()["update"] == "9.0.0"
+
+
+def test_self_test_of_the_build(tmp_path):
+    report = tmp_path / "report.txt"
+    assert selftest.run(report, window=False) == 0
+    assert report.read_text().splitlines()[1] == "recognition: ok"
 
 
 def test_check_for_updates_button(ocr, monkeypatch):

@@ -31,6 +31,9 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+    outputs:
+      new: ${{ steps.version.outputs.new }}
+      number: ${{ steps.version.outputs.number }}
     steps:
       - uses: actions/checkout@v4
       - name: Check version
@@ -49,7 +52,7 @@ jobs:
         if: steps.version.outputs.new == 'true'
         run: |
           pip install -r requirements.txt pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot/ui/icon.ico --add-data "raidpilot/ui;raidpilot/ui" --add-data "raidpilot/storages.onnx;raidpilot" --collect-all rapidocr --collect-all webview main.py
+          python tools/build_exe.py
       - name: Build installer
         if: steps.version.outputs.new == 'true'
         shell: pwsh
@@ -59,7 +62,82 @@ jobs:
           & $iscc "/DVersion=${{ steps.version.outputs.number }}" installer\raidpilot.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/make_zip.py
+      # What a friend does: install, perhaps over an older version that is still open, and start
+      - name: Test the installer
+        if: steps.version.outputs.new == 'true'
+        shell: pwsh
+        run: |
+          function Setup($file, $options) {
+            $p = Start-Process $file -ArgumentList $options -PassThru
+            if (-not $p.WaitForExit(300000)) { throw "Setup did not finish: $file" }
+            if ($p.ExitCode -ne 0) { throw "Setup failed with $($p.ExitCode): $file" }
+          }
+          $folder = "$env:LOCALAPPDATA\Programs\RaidPilot"
+          gh release download --pattern "*-Setup.exe" --dir previous
+          if ($LASTEXITCODE -eq 0) {
+            Setup (Get-Item previous\*-Setup.exe).FullName @("/VERYSILENT", "/SUPPRESSMSGBOXES")
+            Start-Sleep 15
+          }
+          Setup (Get-Item dist\*-Setup.exe).FullName @("/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS")
+          Start-Sleep 10
+          Stop-Process -Name RaidPilot -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Recurse $folder -Include msvcp140*.dll, vcruntime140*.dll | ForEach-Object Name | Sort-Object -Unique
+          $report = "$PWD\selftest.txt"
+          $p = Start-Process "$folder\RaidPilot.exe" -ArgumentList "--self-test", "`"$report`"" -PassThru
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); throw "The self-test did not finish" }
+          Get-Content $report
+          if ($p.ExitCode -ne 0) { throw "The self-test failed" }
+          if ((Get-Content $report -First 1) -ne "RaidPilot ${{ steps.version.outputs.number }}") { throw "The old version is still installed" }
       - name: Publish
         if: steps.version.outputs.new == 'true'
         shell: bash
         run: gh release create "v${{ steps.version.outputs.number }}" dist/*-Setup.exe dist/RaidPilot-source.zip --target "$GITHUB_SHA" --title "RaidPilot ${{ steps.version.outputs.number }}" --generate-notes
+
+  # An installed copy with a lower number must bring itself up to the release without any click
+  verify-update:
+    needs: release
+    if: needs.release.outputs.new == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build and install an older version
+        shell: pwsh
+        run: |
+          (Get-Content raidpilot/version.py) -replace '^VERSION = .*', 'VERSION = "0.0.1"' | Set-Content raidpilot/version.py
+          pip install -r requirements.txt pyinstaller
+          python tools/build_exe.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DVersion=0.0.1" installer\raidpilot.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process (Get-Item dist\RaidPilot-0.0.1-Setup.exe).FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -PassThru
+          if (-not $p.WaitForExit(300000)) { throw "Setup did not finish" }
+      - name: Wait for the app to update itself
+        shell: pwsh
+        run: |
+          $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{7B0E2C55-3F0B-4C5E-9D6E-5C2B9A41D7E3}_is1"
+          $wanted = "${{ needs.release.outputs.number }}"
+          $app = "$env:LOCALAPPDATA\Programs\RaidPilot\RaidPilot.exe"
+          $version = ""
+          foreach ($round in 1..3) {   # again if GitHub refuses the first question
+            if (-not (Get-Process RaidPilot -ErrorAction SilentlyContinue)) { Start-Process $app }
+            foreach ($i in 1..60) {
+              $version = (Get-ItemProperty $key -ErrorAction SilentlyContinue).DisplayVersion
+              if ($version -eq $wanted) { break }
+              Start-Sleep 3
+            }
+            if ($version -eq $wanted) { break }
+            Stop-Process -Name RaidPilot -Force -ErrorAction SilentlyContinue
+            Start-Sleep 5
+          }
+          Get-Content "$env:APPDATA\RaidPilot\raidpilot.log" -ErrorAction SilentlyContinue
+          if ($version -ne $wanted) { throw "Still at version $version" }
+          Start-Sleep 20
+          if (-not (Get-Process RaidPilot -ErrorAction SilentlyContinue)) { throw "The new version did not start" }
+          "Updated on its own from 0.0.1 to $version and running."
+

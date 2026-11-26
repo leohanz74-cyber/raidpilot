@@ -104,8 +104,9 @@ async function poll() {
     }
     appendLog(data.log);
     const banner = $("#update-banner");
-    banner.hidden = !data.update;
+    banner.hidden = !data.update && !banner.disabled;
     if (data.update && !banner.disabled) banner.textContent = `Install version ${data.update}`;
+    if (data.auto_update && !banner.disabled) installUpdate(true);
   }
   setTimeout(poll, 800);
 }
@@ -214,13 +215,16 @@ $("#webhook-remove").onclick = async () => {
   if (result.ok) { applySettings(result.settings); $("#webhook").value = ""; $("#discord-panel").hidden = true; }
 };
 
-$("#update-banner").onclick = async e => {
-  const banner = e.currentTarget;
+// auto: right after the start, without a click
+async function installUpdate(auto = false) {
+  const banner = $("#update-banner");
   banner.disabled = true;
+  banner.hidden = false;
   banner.textContent = "Downloading update…";
-  const result = await must("install_update");
-  if (result.ok) banner.textContent = "Restarting…"; else banner.disabled = false;
-};
+  const result = await must("install_update", auto);
+  if (result.ok && result.result) banner.textContent = "Restarting…"; else banner.disabled = false;
+}
+$("#update-banner").onclick = () => installUpdate();
 
 $("#check-update").onclick = async e => {
   const button = e.currentTarget, note = $("#update-state");

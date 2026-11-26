@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -108,14 +109,27 @@ def extract_source(data: bytes, target: Path) -> int:
     return len(files)
 
 
-def install(info: dict) -> str:
-    """Returns 'exit' (installer is running) or 'restart' (files replaced)."""
+def _launch_setup(setup: Path) -> None:
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.kernel32.SetDllDirectoryW(None)  # the installer must not load our libraries
+    # The installer starts the new version itself, which must not take over this program's settings
+    subprocess.Popen([str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS"],
+                     env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+
+
+def install(info: dict, downloaded=None) -> str:
+    """Returns 'exit' (installer is running) or 'restart' (files replaced).
+    downloaded is called once the new version is here and about to be installed."""
     frozen = bool(getattr(sys, "frozen", False))
     data = download(pick_asset(info, frozen))
+    if downloaded:
+        downloaded()
     if frozen:
         setup = Path(tempfile.mkdtemp(prefix="raidpilot-")) / f"RaidPilot-{info['version']}{SETUP_SUFFIX}"
         setup.write_bytes(data)
-        subprocess.Popen([str(setup), "/SILENT", "/CLOSEAPPLICATIONS"])
+        _launch_setup(setup)
         return "exit"
     extract_source(data, Path(__file__).resolve().parent.parent)
     return "restart"

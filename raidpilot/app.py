@@ -13,6 +13,10 @@ def ui_path() -> str:
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":  # used when a release is built
+        from . import selftest
+
+        sys.exit(selftest.run(Path(sys.argv[2])))
     try:
         import cv2
         import webview

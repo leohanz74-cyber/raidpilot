@@ -19,6 +19,8 @@ UninstallDisplayIcon={app}\RaidPilot.exe
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=yes
+; The new version is started by [Run]; Windows must not start the old one a second time
+RestartApplications=no
 
 [Files]
 Source: "..\dist\RaidPilot\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion

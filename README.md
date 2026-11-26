@@ -22,7 +22,12 @@ read game memory and never moves your mouse. The emulator window may be hidden b
 2. Pick army, spells and loot threshold on the **Home** tab.
 3. Press **START**. The rest happens on its own.
 
-If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used instead of Python.
+## Installer (no Python needed)
+
+`RaidPilot-…-Setup.exe` from the latest **Release** installs the app once, with a desktop icon and
+without administrator rights; later versions arrive on their own. MuMu Player and the game are needed as
+above. The file is not signed, so Windows may show "Windows protected your PC": **More info**, then
+**Run anyway**. Everyone who uses it should know the warning at the top of this page.
 
 ## What the settings do
 
@@ -88,9 +93,9 @@ The **Log** tab says which step failed. Log file, settings and the latest pictur
 
 ## Updates
 
-The app looks for a new version at every start and when you press **Check for Updates** on the
-**Settings** tab. "Install version …" at the top downloads it, installs it and restarts the app. Nothing
-is installed without that click.
+When the app starts, a new version is downloaded, installed and started on its own. This never happens
+while the bot is running. **Check for Updates** on the **Settings** tab looks again later; then
+"Install version …" at the top installs it with a click.
 
 To publish one: push a new number in `raidpilot/version.py` to `main`. GitHub builds the installer and
 the source package.
