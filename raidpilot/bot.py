@@ -8,7 +8,7 @@ import traceback
 
 import numpy as np
 
-from . import army, layout, notify, screen as screen_mod
+from . import army, layout, notify, screen as screen_mod, storages
 from .adb import AdbError
 from .mumu import MumuError
 
@@ -31,9 +31,11 @@ WALLS_PER_VISIT = 15
 WALL_SCROLLS = 22         # swipes through the builder list while looking for walls
 WALL_TRIGGER = 0.5        # walls are upgraded once a storage is this full
 WALL_PAUSE = 5            # village visits without a new try after walls did not work
+REWARD_TAPS = 30          # taps through reward screens before giving up
 
 
 NOT_ENOUGH = "Not enough gold or elixir for the next wall."
+SIDE_NAMES = {"tl": "Top Left", "tr": "Top Right", "bl": "Bottom Left", "br": "Bottom Right"}
 
 
 class Stop(Exception):
@@ -65,6 +67,8 @@ class Bot:
         self._zoomed = False
         self._counted = False
         self._wall_pause = 0
+        self._finder = None
+        self._reward_stuck = False
         self._stop = threading.Event()
         self._thread = None
         self.status = "Ready"
@@ -179,8 +183,50 @@ class Bot:
                 return name, point
         return None, None
 
-    def _wait_for(self, names, timeout: float, interval: float = 0.3):
-        """Waits for one of the buttons. Handles dialogs that can appear while an attack starts."""
+    def _reward_target(self, shot):
+        """What to tap next on a reward screen, or None. Nothing is touched where money is mentioned."""
+        popup = layout.REGIONS["popup"]
+        if shot.contains_word(layout.BUY_WORDS, popup):
+            return None
+        point = shot.button("claim") or shot.find_text(layout.BUTTONS["continue"][1], popup)
+        if point:
+            return point
+        return shot.px(layout.POINTS["chest"]) if shot.is_chest() else None
+
+    def _collect_rewards(self, shot) -> bool:
+        """Taps through chests, snack packs and star bonus screens until they are gone.
+        True if a reward screen was there and is gone now."""
+        if self._reward_stuck or not self._reward_target(shot):
+            return False
+        self._wait(0.6)  # a fading screen can look like a chest for a moment
+        shot = self._shot()
+        point = self._reward_target(shot)
+        if not point:
+            return False
+        before = self.status
+        self.status = "Collecting rewards…"
+        self.log("Collecting a reward…")
+        self._capture("last_reward", shot)
+        for _ in range(REWARD_TAPS):
+            self._tap(point, 1.0)
+            point = self._reward_target(self._shot())
+            if not point:
+                self._wait(1.2)  # the screen flashes white between two steps
+                point = self._reward_target(self._shot())
+                if not point:
+                    self.log("Reward collected.", "good")
+                    break
+        else:
+            # Probably something else: leave it to the usual ways back, which can restart the game
+            self._reward_stuck = True
+            self._capture("reward_stuck", self._shot())
+            self.log("The reward screen does not close.", "warn")
+        self.status = before
+        return not self._reward_stuck
+
+    def _wait_for(self, names, timeout: float, interval: float = 0.3, rewards: bool = False):
+        """Waits for one of the buttons. Handles dialogs that can appear while an attack starts.
+        With rewards=True a reward screen is collected too and reported as "reward"."""
         began = self.clock()
         while True:
             shot = self._shot()
@@ -190,6 +236,8 @@ class Bot:
             if name:
                 return shot, name, point
             if waited >= 2.5:
+                if rewards and self._collect_rewards(shot):
+                    return shot, "reward", None
                 if shot.shows_gems():
                     self.adb.back()
                     raise BotError("The game asks for gems (not enough gold to search?). Nothing was bought.")
@@ -207,10 +255,10 @@ class Bot:
                 return True
         return False
 
-    def _warn_once(self, key: str, text: str) -> None:
+    def _warn_once(self, key: str, text: str, level: str = "warn") -> None:
         if key not in self._warned:
             self._warned.add(key)
-            self.log(text, "warn")
+            self.log(text, level)
 
     def _report(self, headline: str) -> None:
         url = self.get_settings().get("webhook")
@@ -324,6 +372,7 @@ class Bot:
         for _ in range(300):
             shot = self._shot()
             if shot.home(thorough=unknown >= 2):
+                self._reward_stuck = False
                 return shot
             if unknown < 2:  # screens fade in and out: look again quickly before reading everything
                 point = shot.button("return_home")
@@ -346,9 +395,6 @@ class Bot:
             unknown += 1
             if unknown == 4:
                 self._capture("unrecognised", shot)
-            if unknown >= 3 and not shot.readable_words(layout.REGIONS["popup"]):
-                # A reward chest has no text at all: tapping the middle opens it step by step
-                self._tap(shot.px(layout.POINTS["chest"]), 0.5)
             if unknown == 6:
                 self.adb.launch_game()
                 self._wait(4)
@@ -384,10 +430,12 @@ class Bot:
         if cancel:
             self._tap(cancel)
             return True
+        if self._collect_rewards(shot):  # before the gem check: a reward may well be gems
+            return True
         if shot.shows_gems():
             self.adb.back()
             return True
-        name, point = self._find_any(shot, ("reload", "return_home", "continue", "okay"))
+        name, point = self._find_any(shot, ("reload", "return_home", "okay"))
         if name:
             self._tap(point)
             return True
@@ -422,7 +470,11 @@ class Bot:
             self._warn_once("storage", "The storage amounts at the top right cannot be read.")
             return
         capacity = settings["max_storage"]
-        if settings["walls"] and max(values) >= capacity * WALL_TRIGGER:
+        if settings["walls"] and max(values) < capacity * WALL_TRIGGER:
+            self._warn_once("walls_wait", f"Walls start once gold or elixir reaches "
+                            f"{notify.short(capacity * WALL_TRIGGER)} (half of Max Storage Capacity). Now: "
+                            f"{notify.short(values[0])} gold, {notify.short(values[1])} elixir.", "info")
+        elif settings["walls"]:
             if self._wall_pause:
                 self._wall_pause -= 1
             else:
@@ -438,10 +490,18 @@ class Bot:
         if not point:
             return
         self._tap(point, 0.5)
-        shot, name, point = self._wait_for(("find_match", "next", "army_attack"), 12)
+        shot, name, point = self._wait_for(("find_match", "next", "army_attack"), 12, rewards=True)
+        if name == "find_match":
+            claim = shot.button("claim")  # a finished star bonus can wait in the attack menu
+            if claim:
+                self.log("Claiming a reward in the attack menu.", "good")
+                self._tap(claim, 1.0)
+                shot, name, point = self._wait_for(("find_match",), 12, rewards=True)
         if name == "find_match":
             self._tap(point, 0.6)
-            shot, name, point = self._wait_for(("next", "army_attack"), 30)
+            shot, name, point = self._wait_for(("next", "army_attack"), 30, rewards=True)
+        if name == "reward":
+            return  # back to the village and start again
         if name == "army_attack":
             self._tap(point, 0.8)
             shot, name, point = self._wait_for(("next",), 60)
@@ -533,10 +593,10 @@ class Bot:
             return
         if not settings["event_troops"] and any(s.role == "event" for s in slots):
             self.log("Event troops are left out (switched off).")
-        sides = army.choose_sides(settings["style"], settings["army"], self.rng)
+        loot_side = self._loot_side(shot) if settings["style"] == "loot" else None
+        sides = army.choose_sides(settings["style"], settings["army"], self.rng, loot_side)
         span = army.line_span(settings["army"])
-        names = {"tl": "Top Left", "tr": "Top Right", "bl": "Bottom Left", "br": "Bottom Right"}
-        self.log("Deploying from: " + ", ".join(names[s] for s in sides))
+        self.log("Deploying from: " + ", ".join(SIDE_NAMES[s] for s in sides))
         wardens = {s.index for s in slots if s.role == "hero" and army.is_warden(shot.image, s.left, s.right)}
         started = self.clock()
         outward = 0.0
@@ -574,6 +634,28 @@ class Bot:
                 self._warn_once("spells", "No spells found in the army.")
             self._capture("last_deploy", self._shot())
         self._watch_battle(loot, sorted(abilities + waves, key=lambda entry: entry[0]), started)
+
+    def _loot_side(self, shot):
+        """The edge closest to the opponent's gold and elixir storages, or None."""
+        try:
+            self._finder = self._finder or storages.Finder()
+            found = self._finder.find(shot.image)
+        except Exception as exc:  # a missing or broken model must not cost the attack
+            self._warn_once("finder", f"Storage recognition is not available: {exc}")
+            return None
+        side = storages.best_side(found)
+        if self.on_capture:
+            try:
+                self.on_capture("last_loot", storages.mark(shot.image, found, side))
+            except OSError:
+                pass
+        if side:
+            gold = sum(storage.kind == "gold" for storage in found)
+            self.log(f"Most loot near {SIDE_NAMES[side]} ({gold} gold and {len(found) - gold} elixir "
+                     "storages recognised).", "good")
+        else:
+            self.log("Storages not recognised on this base, using a random side.", "warn")
+        return side
 
     def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> float:
         """Places all troops of one card, spread evenly. Returns how far outwards it had to go."""

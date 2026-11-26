@@ -14,7 +14,8 @@ BUTTONS = {
     "okay": ((0.15, 0.40, 0.85, 0.95), ("Okay", "OK")),
     "cancel": ((0.15, 0.40, 0.85, 0.95), ("Cancel",)),
     "reload": ((0.10, 0.35, 0.90, 0.95), ("Reload Game", "Reload", "Try Again", "Retry")),
-    # reward chests that cover the village after some attacks
+    # rewards: star bonus, snack packs and chests that cover the village after some attacks
+    "claim": ((0.15, 0.40, 0.85, 0.95), ("Claim", "Claim Reward", "Claim All")),
     "continue": ((0.25, 0.72, 0.75, 0.98), ("Continue",)),
     "donate": ((0.00, 0.08, 0.45, 0.92), ("Donate",)),
 }
@@ -46,7 +47,7 @@ STORAGE_ROWS = (
     (0.850, 0.096, 0.954, 0.147),
 )
 # These labels must match completely ("End Battle" is not "Battle")
-EXACT = ("home_battle", "home_build")
+EXACT = ("home_battle", "home_build", "claim")  # "Claimed" must not count either
 
 REGIONS = {
     "loot": (0.00, 0.02, 0.30, 0.45),
@@ -95,6 +96,12 @@ BLOCKED = (
 
 # Words that point to a purchase: such dialogs are never confirmed
 PURCHASE_WORDS = ("gem", "gems", "buy", "purchase", "missing", "notenough", "needmore", "insufficient")
+# A reward screen with one of these words is left alone: it could cost money
+BUY_WORDS = ("buy", "purchase", "spend", "missing", "notenough", "needmore", "insufficient")
+# The only texts a reward chest may show while it waits to be tapped
+CHEST_WORDS = ("tap", "snackpack", "starbonus")
+# Brightness of a reward scene: darker is a loading screen, brighter the clouds or the flash in between
+CHEST_LIGHT = (35, 215)
 OTHER_DEVICE_WORDS = ("anotherdevice", "otherdevice")
 BREAK_WORDS = ("personalbreak", "takeabreak", "timeforabreak")
 

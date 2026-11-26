@@ -33,7 +33,7 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 | Spells | None, Rage Spells (purple spell cards) or Totem Spells (the other spell cards). Cast in two halves: near the edge first, deeper a few seconds later. |
 | Minimum Loot | The opponent needs at least this much gold **and** this much elixir. Otherwise it presses "Next" (every "Next" costs gold). |
 | Max Storage Capacity | Your storage size (up to 31M); used for "stop when full" and wall upgrades. |
-| Deployment Style | Random (one of the two upper sides, which are fully visible), a fixed side or all sides. |
+| Deployment Style | Random (one of the two upper sides, which are fully visible), **Most Loot** (see below), a fixed side or all sides. |
 | Deploy Heroes Automatically | **Off by default.** Hero cards are never touched while off. |
 | Use Siege Machines | Deploys the siege machine card. |
 | Use Event Troops | Deploys cards with the event badge, plus icons saved with "Capture Event Troop". |
@@ -48,14 +48,25 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 At the latest 90 seconds after the first troop; earlier when no new loot arrived for 22 seconds (not before
 second 50) or when almost nothing is left. The loot gained so far is kept; ending early can cost stars.
 
+## Most Loot
+
+Before deploying, the app looks for gold and elixir storages on the zoomed out opponent base and deploys on
+the side closest to them. The log names the side and how many storages were recognised;
+`captures/last_loot.png` shows them marked. The recognition (`raidpilot/storages.onnx`) learned from a small
+number of high Town Hall bases: unusual building skins or sceneries can be missed or mistaken. With fewer
+than two recognised storages a random upper side is used.
+
 ## Hero abilities
 
 With "Deploy Heroes Automatically" on, all heroes use their ability about 12 seconds after being placed;
 the Grand Warden follows 5 seconds later.
 
-## Reward chests
+## Rewards
 
-If a reward chest covers the village after an attack, it is tapped open and closed with "Continue".
+Star bonus windows, snack packs and reward chests are handled when they appear: "Claim" and "Continue" are
+pressed and chests are tapped open. This also happens when such a screen pops up right after "Battle". A
+screen that offers to buy something is never claimed. The last reward screen is saved as
+`captures/last_reward.png`.
 
 ## When something is not recognised
 

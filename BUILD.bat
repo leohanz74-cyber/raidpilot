@@ -8,6 +8,6 @@ if not exist "%VPY%" (
   exit /b 1
 )
 "%VPY%" -m pip install --disable-pip-version-check pyinstaller
-"%VPY%" -m PyInstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot\ui\icon.ico --add-data "raidpilot\ui;raidpilot\ui" --collect-all rapidocr --collect-all webview main.py
+"%VPY%" -m PyInstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot\ui\icon.ico --add-data "raidpilot\ui;raidpilot\ui" --add-data "raidpilot\storages.onnx;raidpilot" --collect-all rapidocr --collect-all webview main.py
 if errorlevel 1 (echo BUILD FAILED - read the message above) else (echo DONE: %~dp0dist\RaidPilot\RaidPilot.exe)
 pause

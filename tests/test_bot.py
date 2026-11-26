@@ -73,6 +73,25 @@ def test_battle_without_new_loot_is_ended_early(ocr):
     assert 45 <= game.raid_ended - game.raid_started <= 95, log
 
 
+@pytest.mark.parametrize("found,sides", [(True, "Bottom Right"), (False, None)])
+def test_most_loot_deploys_next_to_the_storages(ocr, monkeypatch, found, sides):
+    from raidpilot import storages
+
+    seen = [storages.Storage("gold", 0.71, 0.58, 1.0), storages.Storage("elixir", 0.67, 0.62, 0.9)]
+    monkeypatch.setattr(storages.Finder, "find", lambda self, image: seen if found else [])
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    bot, stats, log = run_bot(game, ocr, style="loot")
+    assert not bot.last_error and stats.session["attacks"] == 1, log
+    assert game.deployed == {"dragon": 14, "rage": 5}, log
+    placed = [(x, y) for state, x, y in game.taps if state in ("scout", "battle") and y < 735 and x > 200]
+    if found:
+        assert f"Deploying from: {sides}" in log and any("Most loot near Bottom Right" in t for t in log), log
+        assert all(x > 800 for x, _ in placed), placed
+    else:
+        assert "Storages not recognised on this base, using a random side." in log
+        assert "Deploying from: Top Left" in log or "Deploying from: Top Right" in log
+
+
 def test_game_is_not_relaunched_when_the_village_is_open(ocr):
     game = FakeGame(loots=[(900_000, 900_000, 0)])
     bot, _, log = run_bot(game, ocr)
@@ -86,6 +105,8 @@ def test_walls_start_at_half_full_storage(ocr, gold, tried):
     bot, stats, log = run_bot(game, ocr, walls=True)
     assert not bot.last_error, log
     assert any(e.startswith("wall:") for e in game.events) == tried, (game.events, log)
+    waiting = [line for line in log if line.startswith("Walls start once gold or elixir reaches 15.5M")]
+    assert len(waiting) == (0 if tried else 1), log
 
 
 def test_walls_spend_gold_then_elixir(ocr):
@@ -150,6 +171,53 @@ def test_reward_chest_is_opened(ocr):
     bot, stats, log = run_bot(game, ocr, attacks=2, spell="none")
     assert not bot.last_error, log
     assert "reward" in game.events and stats.session["attacks"] == 2, (game.events, log)
+    assert "Reward collected." in log
+
+
+def test_a_screen_that_does_not_close_ends_in_a_game_restart(ocr, monkeypatch):
+    from raidpilot import bot as bot_module
+
+    monkeypatch.setattr(bot_module, "REWARD_TAPS", 3)
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.state = "chest"
+    game.chest_taps = -1000  # never opens
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert log.count("The reward screen does not close.") == 1, log
+    assert "stop" in game.events and stats.session["attacks"] == 1, (game.events, log)
+
+
+def test_reward_that_pops_up_on_battle_costs_no_attempt(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.chest_on_battle = True
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert "reward" in game.events and stats.session["attacks"] == 1, (game.events, log)
+    assert "No opponent screen reached, trying again." not in log
+
+
+def test_star_bonus_window_over_the_village_is_claimed(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.state = "claim"
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert game.events.count("claimed") == 1 and stats.session["attacks"] == 1, (game.events, log)
+
+
+def test_reward_in_the_attack_menu_is_claimed(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.menu_claim = True
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert game.events.count("claimed") == 1 and stats.session["attacks"] == 1, (game.events, log)
+
+
+def test_a_claim_button_next_to_a_price_is_not_touched(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.state = "offer"
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert "offer" not in game.events and stats.session["attacks"] == 1, (game.events, log)
 
 
 def test_loot_counts_when_stopped_during_a_battle(ocr):

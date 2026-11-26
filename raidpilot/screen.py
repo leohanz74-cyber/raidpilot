@@ -153,9 +153,20 @@ class Screen:
         battle = self.button("home_battle", thorough)
         if not battle or not self.button("home_build", thorough):
             return None
-        if self._dimmed() and (self.button("okay") or self.button("cancel") or self.button("reload")):
+        if self._dimmed() and any(self.button(n) for n in ("okay", "cancel", "reload", "claim", "continue")):
             return None
         return battle
+
+    def is_chest(self) -> bool:
+        """A reward chest or snack pack: a scene without any text (except "Tap!") and without game buttons."""
+        popup = layout.REGIONS["popup"]
+        part = self.crop(popup)[0]
+        low, high = layout.CHEST_LIGHT
+        if not low < float(part.max(axis=2).mean()) < high:
+            return False
+        if any(not any(known in normalize(w.text) for known in layout.CHEST_WORDS) for w in self.readable_words(popup)):
+            return False
+        return not any(self.button(name) for name in ("home_battle", "home_build", "end_battle", "return_home"))
 
     def contains_word(self, needles, region=(0, 0, 1, 1)) -> bool:
         for word in self.words(region):

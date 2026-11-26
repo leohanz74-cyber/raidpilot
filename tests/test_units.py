@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from raidpilot import army, layout, settings, store, templates, updater, zoom
+from raidpilot import army, layout, settings, storages, store, templates, updater, zoom
 from raidpilot.adb import Adb, decode_raw
 from raidpilot.api import Api
 from raidpilot.mumu import Mumu, MumuError
@@ -276,6 +276,44 @@ def test_random_side_is_fully_visible():
 
     picked = {army.choose_sides("random", "dragon", random.Random(i))[0] for i in range(40)}
     assert picked == {"tl", "tr"}
+
+
+def _storages(*points):
+    return [storages.Storage("gold", x, y, 1.0) for x, y in points]
+
+
+@pytest.mark.parametrize("side,points", [
+    ("tl", [(0.34, 0.27), (0.38, 0.31)]),
+    ("tr", [(0.66, 0.27), (0.62, 0.31)]),
+    ("bl", [(0.29, 0.58), (0.32, 0.62)]),
+    ("br", [(0.71, 0.58), (0.68, 0.62)]),
+])
+def test_most_loot_picks_the_edge_next_to_the_storages(side, points):
+    assert storages.best_side(_storages(*points, (0.5, 0.45))) == side
+    assert army.choose_sides("loot", "dragon", loot_side=side) == [side]
+
+
+def test_most_loot_needs_enough_storages_and_prefers_a_fully_visible_edge():
+    import random
+
+    assert storages.best_side([]) is None and storages.best_side(_storages((0.3, 0.3))) is None
+    # equally close to an upper and a lower edge: the upper one
+    assert storages.best_side(_storages((0.30, 0.45), (0.30, 0.53))) == "tl"
+    picked = {army.choose_sides("loot", "dragon", random.Random(i))[0] for i in range(40)}
+    assert picked == {"tl", "tr"}, "nothing recognised: like Random Side"
+
+
+def test_storages_are_only_looked_for_on_the_village():
+    assert storages.on_base(0.5, 0.45) and storages.on_base(0.3, 0.35)
+    for point in ((0.05, 0.2), (0.9, 0.1), (0.5, 0.9), (0.2, 0.15), (0.8, 0.75)):
+        assert not storages.on_base(*point), point
+
+
+def test_storage_model_runs_and_finds_nothing_on_an_empty_picture():
+    empty = np.full((900, 1600, 3), (62, 104, 74), np.uint8)
+    finder = storages.Finder()
+    assert finder.find(empty) == [] and finder.find(cv2.resize(empty, (1280, 720))) == []
+    assert storages.mark(empty, _storages((0.5, 0.5)), "tl").shape == empty.shape
 
 
 def test_screenshot_ignores_warning_before_png():

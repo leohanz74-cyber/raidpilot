@@ -17,6 +17,7 @@ ARMIES = {
 SPELLS = {"none": "None", "rage": "Rage Spells", "totem": "Totem Spells"}
 STYLES = {
     "random": "Random Side",
+    "loot": "Most Loot",
     "tl": "Top Left",
     "tr": "Top Right",
     "bl": "Bottom Left",

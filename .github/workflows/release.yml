@@ -49,7 +49,7 @@ jobs:
         if: steps.version.outputs.new == 'true'
         run: |
           pip install -r requirements.txt pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot/ui/icon.ico --add-data "raidpilot/ui;raidpilot/ui" --collect-all rapidocr --collect-all webview main.py
+          pyinstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot/ui/icon.ico --add-data "raidpilot/ui;raidpilot/ui" --add-data "raidpilot/storages.onnx;raidpilot" --collect-all rapidocr --collect-all webview main.py
       - name: Build installer
         if: steps.version.outputs.new == 'true'
         shell: pwsh

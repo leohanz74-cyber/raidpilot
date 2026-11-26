@@ -26,6 +26,8 @@ class FakeGame:
         self.bar_delay = 0
         self.scout_frames = 0
         self.chest_taps = 0
+        self.chest_on_battle = False   # a reward pops up instead of the attack menu
+        self.menu_claim = False        # the attack menu offers a reward
         self.serial = ""
         self.configured = ""
         self.path = "fake-adb"
@@ -81,7 +83,7 @@ class FakeGame:
 
     def back(self):
         self.events.append("back")
-        if self.state in ("menu", "army"):
+        if self.state in ("menu", "army", "offer"):
             self.state = "home"
         elif self.state == "popup":
             self.state = "dialog"
@@ -134,7 +136,19 @@ class FakeGame:
         if self.state == "welcome" and near(820, 749):
             self.state = "home"
         elif self.state == "home" and near(107, 858):
-            self.state = "menu"
+            if self.chest_on_battle:
+                self.chest_on_battle = False
+                self.state = "chest"
+            else:
+                self.state = "menu"
+        elif self.state == "claim" and near(800, 650, 130, 45):
+            self.events.append("claimed")
+            self.state = "home"
+        elif self.state == "offer" and near(800, 650, 130, 45):
+            self.events.append("offer")
+        elif self.state == "menu" and self.menu_claim and near(520, 800, 110, 40):
+            self.events.append("claimed")
+            self.menu_claim = False
         elif self.state == "home" and near(1455, 696, 60):
             self.state = "panel"
             self.scroll = 0
@@ -169,7 +183,7 @@ class FakeGame:
             self.events.append("gems")
         elif self.state == "chest" and near(752, 504, 160, 120):
             self.chest_taps += 1
-            if self.chest_taps >= 3:
+            if self.chest_taps >= 4:
                 self.state = "reward"
         elif self.state == "reward" and near(772, 792, 140, 45):
             self.events.append("reward")
@@ -301,20 +315,31 @@ class FakeGame:
         if self.state == "chest":
             image[:] = (40, 55, 90)
             cv2.circle(image, (752, 450), 150, (30, 40, 190), -1)
+            if self.chest_taps % 2:
+                text("Tap!", 770, 200, 1.0, center=True)
         elif self.state == "reward":
             image[:] = (40, 55, 90)
             text("2x Battle Bake", 770, 90, 1.2, center=True)
             text("Item delivered to the Temporary Storage.", 770, 720, 0.8, center=True)
             button("Continue", 772, 792, 260, (60, 200, 130), 80)
-        if self.state in ("home", "welcome"):
+        if self.state in ("home", "welcome", "claim", "offer"):
             button("Battle", 107, 858, 190)
             if self.state == "welcome":
                 image[:] = (image * 0.5).astype(np.uint8)
                 cv2.rectangle(image, (350, 120), (1250, 820), (225, 235, 240), -1)
                 text("Welcome Back Chief!", 800, 190, 1.4, center=True)
                 button("Okay", 820, 749, 220, (70, 170, 70))
+            elif self.state in ("claim", "offer"):
+                image[:] = (image * 0.5).astype(np.uint8)
+                cv2.rectangle(image, (400, 180), (1200, 720), (225, 235, 240), -1)
+                text("Star Bonus" if self.state == "claim" else "Special Offer", 800, 250, 1.4, center=True)
+                if self.state == "offer":
+                    text("Buy the bundle", 800, 420, 1.0, center=True)
+                button("Claim", 800, 650, 240, (70, 190, 90), 80)
         elif self.state == "menu":
             button("Find a Match", 246, 643, 320)
+            if self.menu_claim:
+                button("Claim", 520, 800, 200, (70, 190, 90))
         elif self.state == "army":
             button("Attack!", 1439, 799)
         elif self.state == "clouds":

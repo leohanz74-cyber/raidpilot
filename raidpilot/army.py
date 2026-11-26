@@ -181,7 +181,12 @@ def choose_spells(image, slots: list, wanted: str) -> list:
     return [s for s in spells if s not in purple] or spells
 
 
-def choose_sides(style: str, army: str, rng=random) -> list:
+def choose_sides(style: str, army: str, rng=random, loot_side: str | None = None) -> list:
+    """The edges to deploy on. loot_side: the edge with the most storages, for the style "loot"."""
+    if style == "loot":
+        if loot_side:
+            return [loot_side]
+        style = "random"  # nothing recognised
     if style == "all":
         return ["tl", "tr", "br", "bl"]
     if style == "random":
