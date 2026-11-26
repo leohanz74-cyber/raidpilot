@@ -30,14 +30,14 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 |---|---|
 | Select Mode | Home Village. Builder Base is not available yet. |
 | Select Army | Chooses the deployment pattern for your trained army (line, compact group or all around). |
-| Spells | None, Rage Spells (purple spell cards) or Totem Spells (the other spell cards). |
-| Minimum Loot Threshold | Opponent's gold + elixir needed before it attacks. Every "Next" costs gold. |
-| Max Storage Capacity | Your storage size; used for "stop when full" and wall upgrades. |
+| Spells | None, Rage Spells (purple spell cards) or Totem Spells (the other spell cards). Cast in two halves: near the edge first, deeper a few seconds later. |
+| Minimum Loot | The opponent needs at least this much gold **and** this much elixir. Otherwise it presses "Next" (every "Next" costs gold). |
+| Max Storage Capacity | Your storage size (up to 31M); used for "stop when full" and wall upgrades. |
 | Deployment Style | Random (one of the two upper sides, which are fully visible), a fixed side or all sides. |
 | Deploy Heroes Automatically | **Off by default.** Hero cards are never touched while off. |
 | Use Siege Machines | Deploys the siege machine card. |
 | Use Event Troops | Deploys cards with the event badge, plus icons saved with "Capture Event Troop". |
-| Auto Upgrade Walls (Beta) | Upgrades walls once gold or elixir reaches half of Max Storage Capacity. The game needs a free builder for this. Never confirms gem dialogs. |
+| Auto Upgrade Walls (Beta) | Once gold or elixir reaches half of Max Storage Capacity: opens the builder list, picks a wall, upgrades it with gold or elixir and repeats until no wall in the list can be paid (at most 15 per visit). It can use up most of both storages. Needs a free builder. Never uses wall rings and never confirms gem dialogs. |
 | Stop When Storage Is Full | Stops once gold and elixir are full. |
 | Donate Troops Before Attack (Beta) | Answers donation requests in the clan chat. Never spends gems. |
 
@@ -52,6 +52,10 @@ second 50) or when almost nothing is left. The loot gained so far is kept; endin
 
 With "Deploy Heroes Automatically" on, all heroes use their ability about 12 seconds after being placed;
 the Grand Warden follows 5 seconds later.
+
+## Reward chests
+
+If a reward chest covers the village after an attack, it is tapped open and closed with "Continue".
 
 ## When something is not recognised
 

@@ -14,8 +14,8 @@ BUTTONS = {
     "okay": ((0.15, 0.40, 0.85, 0.95), ("Okay", "OK")),
     "cancel": ((0.15, 0.40, 0.85, 0.95), ("Cancel",)),
     "reload": ((0.10, 0.35, 0.90, 0.95), ("Reload Game", "Reload", "Try Again", "Retry")),
-    "upgrade": ((0.12, 0.64, 0.88, 1.00), ("Upgrade More", "Upgrade")),
-    "confirm": ((0.25, 0.55, 0.95, 0.98), ("Confirm", "Okay", "Upgrade")),
+    # reward chests that cover the village after some attacks
+    "continue": ((0.25, 0.72, 0.75, 0.98), ("Continue",)),
     "donate": ((0.00, 0.08, 0.45, 0.92), ("Donate",)),
 }
 # Buttons that never move: only their text line is read, which is many times faster than searching
@@ -28,10 +28,11 @@ SPOTS = {
     "army_attack": (0.847, 0.858, 0.953, 0.918),
 }
 # Gold, elixir and dark elixir of the opponent
+# Starts inside the coin icons: some layouts begin the digits further left, and a leading "1" is thin.
 LOOT_ROWS = (  # narrow enough to leave out the "2x" decorations to the right
-    (0.045, 0.1175, 0.147, 0.1635),
-    (0.045, 0.1730, 0.147, 0.2190),
-    (0.045, 0.2310, 0.147, 0.2780),
+    (0.0385, 0.1175, 0.147, 0.1635),
+    (0.0385, 0.1730, 0.147, 0.2190),
+    (0.0385, 0.2310, 0.147, 0.2780),
 )
 # Orange area of the Battle button: darker when a window lies on top of the village
 BATTLE_PATCH = (0.0125, 0.939, 0.031, 0.967)
@@ -56,7 +57,12 @@ REGIONS = {
     "builders": (0.86, 0.72, 1.00, 0.82),
     "troop_bar": (0.00, 0.81, 1.00, 1.00),
     "popup": (0.10, 0.10, 0.90, 0.95),
-    "builder_list": (0.22, 0.05, 0.85, 0.95),
+    # walls: the list "Buildings & Heroes" at the right, the buttons of the selected wall, the confirm window
+    "panel_title": (0.40, 0.00, 1.00, 0.09),
+    "builder_list": (0.25, 0.07, 1.00, 0.89),
+    "wall_buttons": (0.02, 0.86, 0.70, 1.00),
+    "dialog_title": (0.15, 0.00, 0.85, 0.14),
+    "confirm": (0.45, 0.74, 0.90, 0.96),
     "donate_popup": (0.20, 0.05, 0.98, 0.95),
 }
 
@@ -65,6 +71,7 @@ POINTS = {
     "chat_open": (0.036, 0.500),
     "chat_close": (0.385, 0.455),
     "close_window": (0.966, 0.090),
+    "chest": (0.470, 0.560),
 }
 
 # Deployment lines just outside the red boundary when the map is zoomed out completely
@@ -87,10 +94,9 @@ BLOCKED = (
 )
 
 # Words that point to a purchase: such dialogs are never confirmed
-PURCHASE_WORDS = ("gem", "gems", "buy", "purchase", "missing", "notenough", "insufficient")
+PURCHASE_WORDS = ("gem", "gems", "buy", "purchase", "missing", "notenough", "needmore", "insufficient")
 OTHER_DEVICE_WORDS = ("anotherdevice", "otherdevice")
 BREAK_WORDS = ("personalbreak", "takeabreak", "timeforabreak")
-WALL_WORDS = ("wall",)
 
 
 def blocked(x: float, y: float) -> bool:

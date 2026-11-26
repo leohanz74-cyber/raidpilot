@@ -6,11 +6,26 @@ import numpy as np
 W, H = 1600, 900
 CARD = 108
 HEROES = ("king", "queen", "warden")
+# The builder list: headers and other buildings first, the walls far down
+OTHER_ROWS = ("Suggested upgrades", "Laboratory", "Elixir Collector", "Other upgrades", "Dragon Duke",
+              "Spiky Tower", "Monolith", "Clan Castle", "Spell Factory", "Gold Mine x 5", "Gold Storage x 4",
+              "Smasher", "Crafting Station")
+ROW = 72
 
 
 class FakeGame:
-    def __init__(self, loots=((100_000, 120_000, 800), (450_000, 480_000, 3_200)),
+    def __init__(self, loots=((900_000, 120_000, 800), (650_000, 680_000, 3_200)),
                  storage=(5_000_000, 4_000_000), welcome=False, serial="emulator-5554"):
+        # walls: [price, how many]; the list scrolls; refuse = currencies the game says are not enough
+        self.walls = [[4_800_000, 2], [4_000_000, 3]]
+        self.scroll = 0
+        self.wall = None
+        self.currency = None
+        self.refuse = set()
+        self.builders = 1
+        self.bar_delay = 0
+        self.scout_frames = 0
+        self.chest_taps = 0
         self.serial = ""
         self.configured = ""
         self.path = "fake-adb"
@@ -68,9 +83,31 @@ class FakeGame:
         self.events.append("back")
         if self.state in ("menu", "army"):
             self.state = "home"
+        elif self.state == "popup":
+            self.state = "dialog"
+        elif self.state == "dialog":
+            self.state = "panel"
+        elif self.state == "panel":
+            self.state = "home"
+            self.wall = None
 
-    def swipe(self, *args):
+    def swipe(self, x1, y1, x2, y2, duration=0):
         self.events.append("swipe")
+        if self.state == "panel" and x1 > 1170:
+            rows = len(self.rows())
+            self.scroll = max(0, min(max(0, rows - 10), self.scroll + (4 if y2 < y1 else -4)))
+
+    def rows(self):
+        """(name, price or None, wall index or None) of the builder list."""
+        rows = [(name, None if name.endswith("upgrades") else 90_000_000, None) for name in OTHER_ROWS]
+        for index, (price, amount) in enumerate(self.walls):
+            if amount:
+                rows.append((f"Wall x {amount}" if amount > 1 else "Wall", price, index))
+        return rows
+
+    def visible_rows(self):
+        return [(90 + (i - self.scroll) * ROW, row) for i, row in enumerate(self.rows())
+                if 0 <= i - self.scroll < 10]
 
     def screenshot(self):
         self.now += 0.3
@@ -78,6 +115,8 @@ class FakeGame:
             self.ticks += 1
             if self.ticks >= 2:
                 self.state = "scout"
+        elif self.state == "scout":
+            self.scout_frames += 1
         elif self.state == "battle":
             self.ticks += 1
             if self.ticks >= 14 and not self.endless:
@@ -96,6 +135,45 @@ class FakeGame:
             self.state = "home"
         elif self.state == "home" and near(107, 858):
             self.state = "menu"
+        elif self.state == "home" and near(1455, 696, 60):
+            self.state = "panel"
+            self.scroll = 0
+            self.wall = None
+        elif self.state == "panel":
+            if x >= 1170:
+                for row_y, (_, _, wall) in self.visible_rows():
+                    if wall is not None and abs(y - row_y - 8) <= 30:
+                        self.wall = wall
+                        self.events.append(f"select:{wall}")
+            elif self.wall is not None and 780 <= y <= 890:
+                for name, cx in (("gold", 399), ("elixir", 572), ("ring", 750)):
+                    if abs(x - cx) <= 65:
+                        if name == "ring":
+                            self.events.append("ring")
+                        else:
+                            self.currency = name
+                            self.state = "dialog"
+        elif self.state == "dialog" and near(1115, 770, 125, 55):
+            price = self.walls[self.wall][0]
+            mine = 0 if self.currency == "gold" else 1
+            if self.currency in self.refuse or self.storage[mine] < price:
+                self.state = "popup"
+            else:
+                self.storage[mine] -= price
+                self.walls[self.wall][1] -= 1
+                self.events.append("wall:" + self.currency)
+                self.state = "panel"
+                if not self.walls[self.wall][1]:
+                    self.wall = None
+        elif self.state == "popup" and near(746, 569, 120, 50):
+            self.events.append("gems")
+        elif self.state == "chest" and near(752, 504, 160, 120):
+            self.chest_taps += 1
+            if self.chest_taps >= 3:
+                self.state = "reward"
+        elif self.state == "reward" and near(772, 792, 140, 45):
+            self.events.append("reward")
+            self.state = "home"
         elif self.state == "menu" and near(246, 643, 150):
             self.state = "army"
         elif self.state == "army" and near(1439, 799):
@@ -130,6 +208,7 @@ class FakeGame:
 
     # ---------- game logic ----------
     def _search(self):
+        self.scout_frames = 0
         self.state = "clouds"
         self.ticks = 0
         self.selected = None
@@ -185,7 +264,48 @@ class FakeGame:
             text(spaced(self.storage[1]), 1365, 118, 0.9)
             text("TestChief", 135, 75, 0.9)
             button("Build", 1495, 855, 120)
-            text("1/6", 1455, 700, 0.9)
+            text(f"{self.builders}/6", 1430, 705, 0.9)
+        if self.state in ("panel", "dialog", "popup"):
+            text(spaced(self.storage[0]), 930, 55, 0.9)
+            text(spaced(self.storage[1]), 930, 118, 0.9)
+            cv2.rectangle(image, (1172, 0), (1600, 900), (80, 95, 120), -1)
+            text("Buildings & Heroes", 1379, 26, 0.8, center=True)
+            for y, (name, price, wall) in self.visible_rows():
+                cv2.rectangle(image, (1180, y - 28), (1590, y + 38), (110, 140, 180), -1)
+                text(name, 1230, y + 8, 0.7)
+                if price:
+                    text(spaced(price), 1440, y + 30, 0.65)
+                    cv2.circle(image, (1575, y + 22), 9, (220, 60, 200), -1)
+            if self.wall is not None:
+                for label, cx, color in (("gold", 399, (150, 185, 205)), ("elixir", 572, (150, 185, 205)),
+                                         ("ring", 750, (235, 150, 40))):
+                    cv2.rectangle(image, (cx - 65, 760), (cx + 65, 890), color, -1)
+                    text("Upgrade", cx, 862, 0.75, center=True)
+                button("Upgrade", 748, 664, 130, (150, 185, 205), 36, 0.7)
+                button("More", 748, 700, 130, (150, 185, 205), 36, 0.7)
+        if self.state in ("dialog", "popup"):
+            price = self.walls[self.wall][0] if self.wall is not None else 0
+            cv2.rectangle(image, (130, 10), (1450, 885), (90, 100, 110), -1)
+            level = "19" if self.wall == 0 else "18"
+            text(f"Upgrade Wall to Level {level}?", 791, 57, 1.3, center=True)
+            cv2.rectangle(image, (750, 150), (1420, 700), (245, 245, 245), -1)
+            cv2.rectangle(image, (985, 725), (1245, 835), (60, 200, 130), -1)
+            text("Confirm", 1115, 755, 0.9, center=True)
+            text(spaced(price), 1090, 790, 0.9, center=True)
+            cv2.circle(image, (1195, 790), 22, (40, 190, 250) if self.currency == "gold" else (220, 60, 200), -1)
+        if self.state == "popup":
+            cv2.rectangle(image, (500, 230), (1160, 640), (225, 235, 240), -1)
+            text(f"Need more {self.currency.title()}", 830, 285, 1.1, center=True)
+            text("Buy the missing amount?", 830, 420, 0.9, center=True)
+            button("882", 746, 569, 240, (70, 190, 90), 90)
+        if self.state == "chest":
+            image[:] = (40, 55, 90)
+            cv2.circle(image, (752, 450), 150, (30, 40, 190), -1)
+        elif self.state == "reward":
+            image[:] = (40, 55, 90)
+            text("2x Battle Bake", 770, 90, 1.2, center=True)
+            text("Item delivered to the Temporary Storage.", 770, 720, 0.8, center=True)
+            button("Continue", 772, 792, 260, (60, 200, 130), 80)
         if self.state in ("home", "welcome"):
             button("Battle", 107, 858, 190)
             if self.state == "welcome":
@@ -209,7 +329,8 @@ class FakeGame:
             if self.state == "scout":
                 button("Next", 1491, 617, 120, h=90)
             cv2.rectangle(image, (0, 735), (W, H), (32, 32, 32), -1)
-            for index, (name, count, color, left) in enumerate(self.army):
+            late = self.state == "scout" and 0 < self.bar_delay and self.scout_frames <= self.bar_delay
+            for index, (name, count, color, left) in enumerate([] if late else self.army):
                 used = count == 0
                 placed = name in HEROES and self.deployed.get(name)
                 if placed:

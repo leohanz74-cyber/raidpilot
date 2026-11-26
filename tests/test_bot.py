@@ -80,12 +80,76 @@ def test_game_is_not_relaunched_when_the_village_is_open(ocr):
     assert game.events.count("zoom:home") == 1
 
 
-@pytest.mark.parametrize("gold,tried", [(12_500_000, True), (11_000_000, False)])
+@pytest.mark.parametrize("gold,tried", [(15_600_000, True), (15_000_000, False)])
 def test_walls_start_at_half_full_storage(ocr, gold, tried):
     game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(gold, 1_000_000))
-    bot, _, log = run_bot(game, ocr, walls=True, max_storage=24_000_000)
+    bot, stats, log = run_bot(game, ocr, walls=True)
     assert not bot.last_error, log
-    assert ("No wall was found in the builder list." in log) == tried, log
+    assert any(e.startswith("wall:") for e in game.events) == tried, (game.events, log)
+
+
+def test_walls_spend_gold_then_elixir(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 9_000_000))
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error, log
+    bought = [e for e in game.events if e.startswith("wall:")]
+    # 17M gold + 9M elixir pay for all five walls: two for 4.8M, three for 4M
+    assert len(bought) == 5 and {"wall:gold", "wall:elixir"} <= set(bought), (bought, log)
+    assert stats.session["walls"] == 5
+    assert "gems" not in game.events and "ring" not in game.events
+    assert game.state == "home" and stats.session["attacks"] == 1
+
+
+def test_gem_offer_is_closed_and_the_other_resource_used(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(20_000_000, 10_000_000))
+    game.refuse = {"gold"}  # the game says gold is not enough, whatever the bot has read
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error, log
+    assert "gems" not in game.events, game.events
+    assert [e for e in game.events if e.startswith("wall:")] == ["wall:elixir"] * 2, (game.events, log)
+    assert stats.session["walls"] == 2 and stats.session["attacks"] == 1
+
+
+def test_no_free_builder_skips_walls(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(20_000_000, 1_000_000))
+    game.builders = 0
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["walls"] == 0, log
+    assert any("No free builder" in line for line in log), log
+
+
+def test_both_resources_must_reach_the_minimum(ocr):
+    game = FakeGame(loots=[(2_000_000, 590_000, 0), (590_000, 2_000_000, 0), (610_000, 620_000, 0)])
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error, log
+    assert game.base == 2 and stats.session["searches"] == 2, log
+    assert "end" not in [e for e in game.events[:game.events.index("card:dragon")]]  # skipped with Next
+
+
+def test_late_troop_bar_is_waited_for(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.bar_delay = 4  # missing during the first looks
+    bot, stats, log = run_bot(game, ocr, spell="none")
+    assert not bot.last_error and stats.session["attacks"] == 1, log
+    assert game.deployed["dragon"] == 14
+
+
+def test_reward_chest_is_opened(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    original = game.tap
+    shown = []
+
+    def tap(x, y):
+        before = game.state
+        original(x, y)
+        if before == "result" and game.state == "home" and not shown:
+            shown.append(True)
+            game.state = "chest"
+
+    game.tap = tap
+    bot, stats, log = run_bot(game, ocr, attacks=2, spell="none")
+    assert not bot.last_error, log
+    assert "reward" in game.events and stats.session["attacks"] == 2, (game.events, log)
 
 
 def test_loot_counts_when_stopped_during_a_battle(ocr):

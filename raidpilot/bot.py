@@ -17,7 +17,9 @@ MIN_BATTLE = 50           # never end for lack of loot before this
 STALE_AFTER = 22          # seconds without new loot
 LOOT_DONE = 0.05          # end once only this share of the loot is left ...
 LOOT_DONE_AFTER = 20      # ... and at least this many seconds have passed
-SPELL_DELAY = 7
+SPELL_DELAY = 7           # seconds after the first troop until the first half of the spells
+SPELL_WAVE_GAP = 8        # seconds between the two halves
+TROOP_LOOKS = 5           # attempts to read the troop bar before a battle is given up
 ABILITY_DELAY = 12        # seconds after the heroes are placed
 WARDEN_GAP = 5            # the Grand Warden's ability comes this much after all others
 LINE_STEPS = (0.0, 0.012, -0.025, -0.045, -0.065)   # tried in turn when nothing lands on the line
@@ -25,9 +27,13 @@ HERO_STEPS = (0.0, -0.03, 0.025)
 MAX_SEARCHES = 60
 UNKNOWN_RELAUNCH = 16     # unknown pictures in a row until the game is restarted
 BOOT_TIMEOUT = 240
-WALLS_PER_VISIT = 5
+WALLS_PER_VISIT = 15
+WALL_SCROLLS = 22         # swipes through the builder list while looking for walls
 WALL_TRIGGER = 0.5        # walls are upgraded once a storage is this full
 WALL_PAUSE = 5            # village visits without a new try after walls did not work
+
+
+NOT_ENOUGH = "Not enough gold or elixir for the next wall."
 
 
 class Stop(Exception):
@@ -340,6 +346,9 @@ class Bot:
             unknown += 1
             if unknown == 4:
                 self._capture("unrecognised", shot)
+            if unknown >= 3 and not shot.readable_words(layout.REGIONS["popup"]):
+                # A reward chest has no text at all: tapping the middle opens it step by step
+                self._tap(shot.px(layout.POINTS["chest"]), 0.5)
             if unknown == 6:
                 self.adb.launch_game()
                 self._wait(4)
@@ -378,7 +387,7 @@ class Bot:
         if shot.shows_gems():
             self.adb.back()
             return True
-        name, point = self._find_any(shot, ("reload", "return_home", "okay"))
+        name, point = self._find_any(shot, ("reload", "return_home", "continue", "okay"))
         if name:
             self._tap(point)
             return True
@@ -466,7 +475,7 @@ class Bot:
                     raise BotError("The loot cannot be read. Check that the resolution is 1600×900.")
             else:
                 unreadable = 0
-                good = loot[0] + loot[1] >= settings["min_loot"]
+                good = min(loot[0], loot[1]) >= settings["min_loot"]
                 self.log(f"Opponent: {notify.short(loot[0])} gold, {notify.short(loot[1])} elixir"
                          + (" → attacking" if good else " → next"), "good" if good else "info")
                 if good:
@@ -474,10 +483,15 @@ class Bot:
             searches += 1
             self.stats.add(searches=1)
             point = shot.button("next", True)
+            if not point:
+                shot, _, point = self._wait_for(("next",), 8)
             if searches >= MAX_SEARCHES or not point:
                 if searches >= MAX_SEARCHES:
                     self.log(f"No match after {searches} villages. Lower the minimum loot if this repeats.", "warn")
                     self.failures += 1
+                else:
+                    self._capture("no_next", shot)
+                    self.log("The Next button was not found, leaving the search.", "warn")
                 leave = shot.button("end_battle", True)
                 if leave:
                     self._end_battle(leave)
@@ -490,25 +504,29 @@ class Bot:
                 self.log("No new opponent was found.", "warn")
                 return None
 
-    def _detect_slots(self):
-        shot = self._shot()
-        slots = army.detect_slots(shot)
-        if not any(s.count for s in slots):  # the bar may still be sliding in
-            self._wait(1.0)
+    def _detect_slots(self, wanted):
+        """The troop bar. It may still be sliding in or a counter may be hidden, so look several times."""
+        for attempt in range(TROOP_LOOKS):
             shot = self._shot()
-            slots = army.detect_slots(shot)
-        return shot, army.assign_roles(shot, slots)
+            slots = army.assign_roles(shot, army.detect_slots(shot))
+            troops = [s for s in slots if s.role in wanted and s.count]
+            if troops:
+                break
+            if attempt + 1 < TROOP_LOOKS:
+                self._wait(1.2)
+        return shot, slots, troops
 
     def _fight(self, loot, settings) -> None:
         self.status = "Zooming out…"
         self._zoom_out()
         self.status = "Deploying troops…"
-        shot, slots = self._detect_slots()
         wanted = ("troop", "event") if settings["event_troops"] else ("troop",)
-        troops = [s for s in slots if s.role in wanted and s.count]
+        shot, slots, troops = self._detect_slots(wanted)
         if not troops:
             self.failures += 1
-            self.log("No troops found in the troop bar. Leaving the battle.", "warn")
+            self._capture("no_troops", shot)
+            seen = ", ".join(f"{s.role} x{s.count}" if s.count else s.role for s in slots) or "no cards"
+            self.log(f"No troops found in the troop bar ({seen}). Leaving the battle.", "warn")
             leave = shot.button("end_battle", True)
             if leave:
                 self._end_battle(leave)
@@ -537,17 +555,25 @@ class Bot:
         self.log(f"Army deployed after {self.clock() - started:.0f} s.")
 
         spells = army.choose_spells(shot.image, slots, settings["spell"])
+        waves = []
         if spells:
             self.status = "Casting spells…"
             self._wait(max(0.0, SPELL_DELAY - (self.clock() - started)))
+            self._capture("last_deploy", self._shot())
+            first, second = [], []
             for slot in spells:
-                self._tap((slot.x, slot.y), 0.15)
-                for rel in army.spell_points(sides, min(slot.count, 11)):
-                    self._tap(shot.px(rel), 0.15)
-        elif settings["spell"] != "none":
-            self._warn_once("spells", "No spells found in the army.")
-        self._capture("last_deploy", self._shot())
-        self._watch_battle(loot, abilities, started)
+                points = [shot.px(p) for p in army.spell_points(sides, min(slot.count, 11))]
+                half = (len(points) + 1) // 2
+                first.append((slot, points[:half]))
+                second.append((slot, points[half:]))
+            self._cast(first)
+            # The second wave lands deeper, when the troops have moved on
+            waves.append((self.clock() + SPELL_WAVE_GAP, [w for w in second if w[1]], ""))
+        else:
+            if settings["spell"] != "none":
+                self._warn_once("spells", "No spells found in the army.")
+            self._capture("last_deploy", self._shot())
+        self._watch_battle(loot, sorted(abilities + waves, key=lambda entry: entry[0]), started)
 
     def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> float:
         """Places all troops of one card, spread evenly. Returns how far outwards it had to go."""
@@ -602,14 +628,25 @@ class Bot:
             plan.append((now + ABILITY_DELAY + WARDEN_GAP, warden, "Grand Warden ability activated."))
         return plan
 
-    def _use_abilities(self, plan: list) -> None:
+    def _cast(self, wave: list) -> None:
+        """wave: [(spell card, positions)]"""
+        for slot, points in wave:
+            self._tap((slot.x, slot.y), 0.15)
+            for point in points:
+                self._tap(point, 0.15)
+
+    def _use_planned(self, plan: list) -> None:
+        """Runs what is due: hero abilities (cards with a log text) and later spell waves."""
         while plan and self.clock() >= plan[0][0]:
-            _, cards, text = plan.pop(0)
-            for slot in cards:
+            _, items, text = plan.pop(0)
+            if not text:
+                self._cast(items)
+                continue
+            for slot in items:
                 self._tap((slot.x, slot.y), 0.2)
             self.log(text)
 
-    def _watch_battle(self, loot, abilities, started) -> None:
+    def _watch_battle(self, loot, plan, started) -> None:
         self.status = "Battle in progress…"
         total = loot[0] + loot[1]
         remaining = total
@@ -632,7 +669,7 @@ class Bot:
                         return
                     continue
                 lost = 0
-                self._use_abilities(abilities)  # only while the battle is on screen
+                self._use_planned(plan)  # only while the battle is on screen
                 now_loot = shot.loot()
                 if now_loot and now_loot[0] + now_loot[1] <= total * 1.02:  # more than at the start: misread
                     left = now_loot[0] + now_loot[1]
@@ -700,68 +737,154 @@ class Bot:
             self._tap(point, 0.8)
 
     # ---------- walls ----------
-    def _find_wall_entry(self):
-        for attempt in range(6):
-            shot = self._shot()
-            if attempt == 0:
-                self._capture("walls_1_builder_menu", shot)
-            for word in screen_mod.join_lines(shot.words(layout.REGIONS["builder_list"])):
-                if any(w in screen_mod.normalize(word.text) for w in layout.WALL_WORDS):
-                    return shot, word
-            self.adb.swipe(*shot.px((0.55, 0.65)), *shot.px((0.55, 0.30)), 500)
-            self._wait(1.0)
-        return shot, None
-
     def _upgrade_walls(self, settings) -> None:
-        for _ in range(WALLS_PER_VISIT):
-            shot = self._go_home()
-            before = shot.storage()
-            if not before or max(before) < settings["max_storage"] * WALL_TRIGGER:
-                return
-            if shot.free_builders() == 0:
-                self._warn_once("builder", "No free builder: the game needs one for walls, skipping for now.")
-                return
-            self.status = "Upgrading walls…"
-            self._tap(shot.px(layout.POINTS["builder_menu"]), 1.5)
-            shot, entry = self._find_wall_entry()
-            if not entry:
-                self._give_up_walls("No wall was found in the builder list.")
-                return
-            self._tap(tuple(int(v) for v in entry.center), 1.8)
-            shot = self._shot()
-            self._capture("walls_2_selected", shot)
-            region = layout.BUTTONS["upgrade"][0]
-            buttons = sorted((w for w in shot.words(region) if screen_mod.normalize(w.text) == "upgrade"),
-                             key=lambda w: w.x)
-            if not buttons:
-                self._give_up_walls("No upgrade button was found for the wall.")
-                return
-            # With two buttons the left one costs gold, the right one elixir
-            choice = buttons[-1] if len(buttons) > 1 and before[1] > before[0] else buttons[0]
-            self._tap(tuple(int(v) for v in choice.center), 1.5)
-            shot = self._shot()
-            self._capture("walls_3_confirm", shot)
-            confirm = None if shot.shows_gems() else shot.button("confirm")
-            if not confirm:
-                self._give_up_walls("The wall upgrade was not confirmed (nothing was bought).")
-                return
-            self._tap(confirm, 1.8)
-            if self._shot().shows_gems():
-                self.adb.back()
-                return
-            after = self._go_home().storage()
-            if after and (after[0] < before[0] or after[1] < before[1]):
-                self.stats.add(walls=1)
-                self.log("Wall upgraded.", "good")
-            else:
-                self._wall_pause = WALL_PAUSE
-                self._warn_once("walls", "The wall upgrade did not go through.")
-                return
+        """Builder list -> a wall line -> "Upgrade" (gold or elixir) -> "Confirm", wall after wall,
+        until the list holds nothing affordable. Gem offers are closed, never confirmed."""
+        shot = self._go_home()
+        storage = shot.storage()
+        if not storage or max(storage) < settings["max_storage"] * WALL_TRIGGER:
+            return
+        builder = shot.builder_button()
+        if builder and builder[0] == 0:
+            self._warn_once("builder", "No free builder: the game needs one for walls, skipping for now.")
+            return
+        self.status = "Upgrading walls…"
+        self.log(f"Storage over half full ({notify.short(storage[0])} gold, {notify.short(storage[1])} "
+                 "elixir): upgrading walls.")
+        money = {"gold": storage[0], "elixir": storage[1]}
+        done, problem, skipped = 0, "No affordable wall was found in the builder list.", set()
+        while done < WALLS_PER_VISIT and len(skipped) < 4:
+            entry = self._find_wall_entry(money, skipped)
+            if entry is None:
+                break
+            problem = self._buy_wall(entry, money)
+            if problem == NOT_ENOUGH:
+                skipped.add(entry[0])  # try a cheaper wall
+                continue
+            if problem:
+                break
+            done += 1
+        self._close_builder_list()
+        if done:
+            self.log(f"Walls finished: {done} upgraded.", "good")
+        else:
+            self._wall_pause = WALL_PAUSE  # do not lose time on it before every attack
+            self._warn_once("walls", problem or "No wall could be upgraded.")
 
-    def _give_up_walls(self, why: str) -> None:
-        self.adb.back()
-        self._wall_pause = WALL_PAUSE  # do not lose time on it before every attack
-        self._warn_once("walls", why)
+    def _open_builder_list(self):
+        """The picture with the open builder list, or None."""
+        shot = self._shot()
+        if shot.upgrade_panel():
+            return shot
+        if not shot.home():
+            shot = self._go_home()
+        builder = shot.builder_button()
+        self._tap(builder[1] if builder else shot.px(layout.POINTS["builder_menu"]), 1.0)
+        for _ in range(3):
+            shot = self._shot()
+            if shot.upgrade_panel():
+                return shot
+            self._wait(0.6)
+        self._capture("walls_no_list", shot)
+        return None
+
+    def _find_wall_entry(self, money, skipped=()):
+        """Scrolls down the builder list to the first wall that can be paid: (price, position)."""
+        shot = self._open_builder_list()
+        if shot is None:
+            return None
+        previous, unchanged = None, 0
+        for _ in range(WALL_SCROLLS):
+            for price, point in shot.wall_entries():
+                if price not in skipped and (price is None or price <= max(money.values())):
+                    return price, point
+            panel = shot.upgrade_panel()
+            if not panel:
+                break
+            x = panel[0] / shot.width
+            picture = shot.crop((x - 0.12, 0.15, x + 0.12, 0.85))[0][::6, ::6].astype(np.int16)
+            if previous is not None and np.abs(picture - previous).mean() < 1.5:
+                unchanged += 1
+                if unchanged >= 2:  # the end of the list
+                    break
+            else:
+                unchanged = 0
+            previous = picture
+            # A slow swipe: a fast one would fling the list past the walls
+            self.adb.swipe(*shot.px((x, 0.74)), *shot.px((x, 0.42)), 700)
+            self._wait(0.7)
+            shot = self._shot()
+        self._capture("walls_not_found", shot)
+        return None
+
+    def _buy_wall(self, entry, money) -> str:
+        """Upgrades the wall of a list line. Returns '' on success, otherwise what went wrong."""
+        price, point = entry
+        self._tap(point, 1.2)
+        tried = set()
+        for _ in range(3):
+            shot = self._shot()
+            buttons = shot.upgrade_buttons()
+            if not buttons:
+                self._wait(0.8)
+                shot = self._shot()
+                buttons = shot.upgrade_buttons()
+            if not buttons:
+                if tried:
+                    break
+                self._capture("walls_2_selected", shot)
+                return "No upgrade button was found for the wall."
+            # The left button costs gold, the right one elixir. Take the fuller storage first.
+            options = [(name, button) for name, button in zip(("gold", "elixir"), buttons)
+                       if name not in tried and (price is None or money[name] >= price)]
+            if not options:
+                break
+            name, button = max(options, key=lambda option: money[option[0]])
+            tried.add(name)
+            self._tap(button, 1.2)
+            shot = self._shot()
+            dialog = shot.wall_dialog()
+            if not dialog:
+                self._wait(0.8)
+                shot = self._shot()
+                dialog = shot.wall_dialog()
+            if not dialog:
+                self._capture("walls_3_confirm", shot)
+                self.adb.back()
+                return "The wall window did not open (nothing was bought)."
+            confirm, cost, currency = dialog
+            currency = currency or name
+            cost = cost or price
+            tried.add(currency)
+            if shot.shows_gems() or (cost and money[currency] < cost):
+                self.adb.back()
+                self._wait(0.8)
+                continue
+            self._capture("walls_3_confirm", shot)
+            self._tap(confirm, 1.5)
+            shot = self._shot()
+            if shot.shows_gems():  # "Need more gold?": close the offer and the window
+                self.adb.back()
+                self._wait(0.8)
+                if self._shot().wall_dialog():
+                    self.adb.back()
+                    self._wait(0.8)
+                money[currency] = min(money[currency], (cost or 1) - 1)
+                continue
+            if shot.wall_dialog():
+                self._capture("walls_4_stuck", shot)
+                self.adb.back()
+                return "The wall upgrade did not go through."
+            money[currency] = max(0, money[currency] - (cost or 0))
+            self.stats.add(walls=1)
+            self.log(f"Wall upgraded for {notify.short(cost) if cost else '?'} {currency}.", "good")
+            return ""
+        return NOT_ENOUGH
+
+    def _close_builder_list(self) -> None:
+        if self._shot().upgrade_panel():
+            self.adb.back()
+            self._wait(0.8)
 
     # ---------- donations ----------
     def _donate(self) -> None:

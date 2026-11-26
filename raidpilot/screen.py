@@ -3,6 +3,8 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
+import cv2
+
 from . import layout
 from .ocr import Word
 
@@ -13,6 +15,13 @@ _DIGIT_FIX = str.maketrans({"O": "0", "o": "0", "Q": "0", "D": "0", "I": "1", "l
 
 # "2x" markers of loot events are not loot
 MULTIPLIER = re.compile(r"^[0-9]\s?[xX×]$")
+
+
+def color_share(patch, low, high) -> float:
+    """Part of the picture that lies in the HSV colour range."""
+    if patch.size == 0:
+        return 0.0
+    return float(cv2.inRange(cv2.cvtColor(patch, cv2.COLOR_BGR2HSV), low, high).mean()) / 255
 
 
 def normalize(text: str) -> str:
@@ -109,6 +118,10 @@ class Screen:
                             x, y = word.center
                             return (int(x), int(y))
         return None
+
+    def readable_words(self, region) -> list:
+        """Real words of a region. Round shapes read as single letters do not count."""
+        return [w for w in self.words(region) if len(normalize(w.text)) >= 3]
 
     def line(self, region, min_score: float = 0.45) -> str:
         """Text of a region that holds one line, or '' if nothing is readable there."""
@@ -230,10 +243,78 @@ class Screen:
         words = [w for w in words if len(normalize(w.text)) >= 2]
         return words[0].text.strip()[:30] if words else ""
 
-    def free_builders(self):
-        """Number of idle builders ('0/6' at the bottom right) or None."""
+    def builder_button(self):
+        """(idle builders, position) of the '3/6' counter at the bottom right, or None."""
         for word in join_lines(self.words(layout.REGIONS["builders"])):
             match = re.search(r"([0-9Oo])\s*/\s*[0-9]", word.text)
-            if match:
-                return int(match.group(1).replace("O", "0").replace("o", "0"))
+            x, y = word.center
+            if match and x < 0.95 * self.width:  # further right is the laboratory counter
+                return int(match.group(1).replace("O", "0").replace("o", "0")), (int(x), int(y))
         return None
+
+    # ---------- walls ----------
+    def upgrade_panel(self):
+        """Position of the open builder list ("Buildings & Heroes"), or None if it is closed."""
+        for word in join_lines(self.words(layout.REGIONS["panel_title"])):
+            if "buildings" in normalize(word.text):
+                return word.center
+        for word in join_lines(self.words(layout.REGIONS["builder_list"])):
+            if normalize(word.text) in ("suggestedupgrades", "otherupgrades", "upgradesinprogress"):
+                return word.center
+        return None
+
+    def wall_entries(self) -> list:
+        """Wall lines of the builder list from top to bottom: (price or None, position)."""
+        region = layout.REGIONS["builder_list"]
+        numbers = self.numbers(region)
+        entries = []
+        for word in sorted(join_lines(self.words(region)), key=lambda w: w.y):
+            if not re.fullmatch(r"\d{0,2}wall(x?\d{1,3})?", normalize(word.text)):
+                continue
+            x, y = word.center
+            # The price stands right of the name, a little lower
+            price = next((value for value, other in numbers
+                          if other.center[0] > x and -0.01 * self.height < other.center[1] - y < 0.05 * self.height
+                          and value >= 1000), None)
+            entries.append((price, (int(x), int(y))))
+        return entries
+
+    def upgrade_buttons(self) -> list:
+        """The "Upgrade" buttons of the selected wall from left to right (gold, then elixir).
+        "Upgrade More" and the blue wall ring button are left out."""
+        found = []
+        for word in self.words(layout.REGIONS["wall_buttons"]):
+            if not label_matches(word.text, "Upgrade") or "more" in normalize(word.text):
+                continue
+            above = self.image[max(0, int(word.y - 2.5 * word.h)):int(word.y), int(word.x):int(word.x + word.w)]
+            if color_share(above, (90, 130, 110), (118, 255, 255)) > 0.30:
+                continue
+            x, y = word.center
+            found.append((int(x), int(y)))
+        return sorted(found)
+
+    def wall_dialog(self):
+        """The window "Upgrade Wall to Level N?": (confirm position, price or None, "gold"/"elixir"/None).
+        None if this window is not open, so nothing else can ever be confirmed."""
+        titles = [normalize(w.text) for w in join_lines(self.words(layout.REGIONS["dialog_title"]))]
+        if not any("upgrade" in t and "wall" in t for t in titles):
+            return None
+        region = layout.REGIONS["confirm"]
+        confirm = next((w for w in self.words(region) if label_matches(w.text, "Confirm")), None)
+        if confirm is None:
+            return None
+        x, y = confirm.center
+        price = currency = None
+        for value, word in self.numbers(region):
+            cx, cy = word.center
+            if abs(cx - x) < 0.08 * self.width and 0 < cy - y < 0.07 * self.height:
+                price = value
+                # The coin or the elixir drop follows the price
+                icon = self.image[int(cy - 0.045 * self.height):int(cy + 0.045 * self.height),
+                                  int(word.x + word.w):int(word.x + word.w + 0.065 * self.width)]
+                gold = color_share(icon, (15, 150, 170), (30, 255, 255))
+                elixir = color_share(icon, (130, 110, 90), (170, 255, 255))
+                if max(gold, elixir) > 0.06:
+                    currency = "gold" if gold > elixir else "elixir"
+                break
+        return (int(x), int(y)), price, currency

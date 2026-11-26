@@ -34,7 +34,7 @@ def test_labels():
 def test_settings_are_validated():
     assert settings.load()["heroes"] is False
     assert settings.update("min_loot", 99_000_000)["min_loot"] == 3_000_000
-    assert settings.update("max_storage", 99_000_000)["max_storage"] == 24_000_000
+    assert settings.update("max_storage", 99_000_000)["max_storage"] == 31_000_000
     assert settings.update("army", "meteor_golem")["army"] == "meteor_golem"
     for key, value in (("style", "diagonal"), ("mode", "builder"), ("webhook", "https://example.com/x")):
         with pytest.raises(ValueError):
@@ -47,6 +47,16 @@ def test_settings_are_validated():
 def test_old_settings_do_not_enable_heroes():
     store.save("settings.json", {"heroes": True, "army": "dragon"})  # file of version 1
     assert settings.load()["heroes"] is False
+
+
+def test_storage_limit_of_older_versions_is_raised():
+    store.save("settings.json", {"schema": 2, "max_storage": 24_000_000, "heroes": True})
+    loaded = settings.load()
+    assert loaded["max_storage"] == 31_000_000 and loaded["heroes"] is True
+    store.save("settings.json", {"schema": 2, "max_storage": 12_000_000})
+    assert settings.load()["max_storage"] == 12_000_000
+    assert settings.update("max_storage", 24_000_000)["max_storage"] == 24_000_000  # chosen now: kept
+    assert settings.load()["max_storage"] == 24_000_000
 
 
 def test_broken_file_is_kept(home):
@@ -114,7 +124,7 @@ def test_troop_bar_roles(ocr):
     assert [s.index for s in wardens] == [5]
     assert [s.index for s in army.choose_spells(shot.image, slots, "rage")] == [6]
     assert army.choose_spells(shot.image, slots, "none") == []
-    assert shot.loot() == (100_000, 120_000, 800)
+    assert shot.loot() == (900_000, 120_000, 800)
 
 
 def test_captured_event_troop_is_recognised(ocr):
@@ -138,9 +148,31 @@ def test_result_and_home(ocr):
     game.state = "home"
     shot = Screen(game.render(), ocr)
     assert shot.home() and shot.storage() == (5_000_000, 4_000_000)
-    assert shot.player_name() == "TestChief" and shot.free_builders() == 1
+    assert shot.player_name() == "TestChief" and shot.builder_button()[0] == 1
     game.state = "welcome"
     assert not Screen(game.render(), ocr).home()
+
+
+def test_wall_screens(ocr):
+    game = FakeGame(storage=(20_000_000, 9_000_000))
+    game.state = "panel"
+    shot = Screen(game.render(), ocr)
+    assert shot.upgrade_panel() and not shot.wall_entries() and not shot.home()
+    game.scroll = 5
+    shot = Screen(game.render(), ocr)
+    assert [price for price, _ in shot.wall_entries()] == [4_800_000, 4_000_000]
+    game.wall = 0
+    buttons = Screen(game.render(), ocr).upgrade_buttons()
+    assert [round(x, -1) for x, _ in buttons] == [400, 570], buttons  # no ring, no "Upgrade More"
+    for currency in ("gold", "elixir"):
+        game.state, game.currency = "dialog", currency
+        shot = Screen(game.render(), ocr)
+        point, price, seen = shot.wall_dialog()
+        assert (price, seen) == (4_800_000, currency) and not shot.shows_gems()
+    game.state = "popup"
+    assert Screen(game.render(), ocr).shows_gems()
+    game.state = "home"
+    assert not Screen(game.render(), ocr).wall_dialog()
 
 
 def test_window_api(ocr):

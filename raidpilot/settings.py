@@ -2,7 +2,7 @@
 from . import store
 
 FILE = "settings.json"
-SCHEMA = 2
+SCHEMA = 3
 
 MODES = {"home": "Home Village", "builder": "Builder Base (not available yet)"}
 ARMIES = {
@@ -29,8 +29,8 @@ DEFAULTS = {
     "mode": "home",
     "army": "dragon",
     "spell": "rage",
-    "min_loot": 600_000,          # gold and elixir of the opponent together
-    "max_storage": 24_000_000,    # capacity of one storage resource
+    "min_loot": 600_000,          # the opponent needs at least this much gold AND this much elixir
+    "max_storage": 31_000_000,    # capacity of one storage resource
     "device": "",                 # empty = MuMu Player instance #0, started automatically
     "style": "random",
     "heroes": False,
@@ -41,7 +41,8 @@ DEFAULTS = {
     "donate": False,
     "webhook": "",
 }
-RANGES = {"min_loot": (0, 3_000_000), "max_storage": (1_000_000, 24_000_000)}
+MAX_CAPACITY = 31_000_000
+RANGES = {"min_loot": (0, 3_000_000), "max_storage": (1_000_000, MAX_CAPACITY)}
 _CHOICES = {"mode": MODES, "army": ARMIES, "spell": SPELLS, "style": STYLES}
 _WEBHOOKS = ("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")
 
@@ -71,8 +72,10 @@ def validate(key: str, value):
 def load() -> dict:
     result = dict(DEFAULTS)
     stored = store.load(FILE, {})
-    if stored.get("schema") != SCHEMA:  # files of version 1 used other defaults
+    if stored.get("schema") not in (2, SCHEMA):  # files of version 1 used other defaults
         return result
+    if stored["schema"] == 2 and stored.get("max_storage") == 24_000_000:
+        stored["max_storage"] = MAX_CAPACITY  # that was the old end of the slider
     for key, value in stored.items():
         try:
             result[key] = validate(key, value)
