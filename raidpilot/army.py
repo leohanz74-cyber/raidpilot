@@ -264,23 +264,28 @@ def _inside(x: float, y: float) -> tuple:
     return (x, y)
 
 
+def spot(name: str, t: float, outward: float = 0.0) -> tuple:
+    """The point at share t (0..1) of a side, moved away from the middle by outward."""
+    (x1, y1), (x2, y2) = layout.SIDES[name]
+    x = x1 + (x2 - x1) * t
+    y = y1 + (y2 - y1) * t
+    if outward:
+        dx, dy = x - layout.CENTER[0], y - layout.CENTER[1]
+        length = math.hypot(dx, dy) or 1
+        x += dx / length * outward
+        y += dy / length * outward
+    return _inside(x, y)
+
+
 def line_points(names: list, count: int, outward: float = 0.0, span=(0.0, 1.0)) -> list:
     """count points spread evenly over the chosen sides (relative coordinates)."""
     count = max(1, count)
     points = []
     per_side = [count // len(names) + (1 if i < count % len(names) else 0) for i in range(len(names))]
     for name, amount in zip(names, per_side):
-        (x1, y1), (x2, y2) = layout.SIDES[name]
         for i in range(amount):
             t = 0.5 if amount == 1 else span[0] + (span[1] - span[0]) * i / (amount - 1)
-            x = x1 + (x2 - x1) * t
-            y = y1 + (y2 - y1) * t
-            if outward:
-                dx, dy = x - layout.CENTER[0], y - layout.CENTER[1]
-                length = math.hypot(dx, dy) or 1
-                x += dx / length * outward
-                y += dy / length * outward
-            points.append(_inside(x, y))
+            points.append(spot(name, t, outward))
     return points
 
 

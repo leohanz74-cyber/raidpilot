@@ -55,6 +55,46 @@ def test_all_toggles(ocr):
     assert abilities == ["ability:king", "ability:queen", "ability:warden"], (abilities, log)
 
 
+def middle_of_top_left():
+    return (int(0.27 * 1600), int(0.24 * 900))
+
+
+def test_red_spot_in_the_middle_of_the_side(ocr):
+    # A building makes the middle of the line red: troops and heroes must find another place
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.red = [(*middle_of_top_left(), 110)]
+    bot, stats, log = run_bot(game, ocr, heroes=True, spell="none")
+    assert not bot.last_error and stats.session["attacks"] == 1, log
+    assert game.deployed == {"dragon": 14, "king": 1, "queen": 1, "warden": 1}, (game.deployed, log)
+    assert not [line for line in log if "could not be deployed" in line], log
+
+
+def card(name, count, left):
+    colours = {"dragon": (60, 190, 90), "king": (40, 90, 220), "queen": (60, 200, 190), "warden": (200, 40, 180),
+               "champion": (40, 160, 230), "rage": (210, 90, 210)}
+    return [name, count, colours[name], left]
+
+
+ARMIES = {
+    "no hero (all upgrading)": ([card("dragon", 8, 118), card("rage", 2, 270)], {"dragon": 8, "rage": 2}),
+    "two heroes": ([card("dragon", 17, 118), card("queen", None, 253), card("warden", None, 374),
+                    card("rage", 5, 509)], {"dragon": 17, "queen": 1, "warden": 1, "rage": 5}),
+    "four heroes, one dragon": ([card("dragon", 1, 118), card("king", None, 253), card("queen", None, 374),
+                                 card("warden", None, 495), card("champion", None, 616), card("rage", 3, 751)],
+                                {"dragon": 1, "king": 1, "queen": 1, "warden": 1, "champion": 1, "rage": 3}),
+}
+
+
+@pytest.mark.parametrize("roster,expected", ARMIES.values(), ids=ARMIES.keys())
+def test_any_number_of_troops_and_heroes(ocr, roster, expected):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.roster = roster
+    bot, stats, log = run_bot(game, ocr, heroes=True)
+    assert not bot.last_error and stats.session["attacks"] == 1, log
+    assert game.deployed == expected, (game.deployed, log)
+    assert not [line for line in log if "could not be" in line], log
+
+
 def test_several_attacks_in_a_row(ocr):
     game = FakeGame(loots=[(900_000, 900_000, 2_000)])
     bot, stats, log = run_bot(game, ocr, attacks=3, style="all", army="sneaky_goblin")

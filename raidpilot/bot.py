@@ -29,7 +29,12 @@ TROOP_LOOKS = 5           # attempts to read the troop bar before a battle is gi
 ABILITY_DELAY = 12        # seconds after the heroes are placed
 WARDEN_GAP = 5            # the Grand Warden's ability comes this much after all others
 LINE_STEPS = (0.0, 0.012, -0.025, -0.045, -0.065)   # tried in turn when nothing lands on the line
-HERO_STEPS = (0.0, -0.03, 0.025)
+# Single places along a side, for what did not land: a building can make a stretch of the line red
+SPOTS = (0.5, 0.2, 0.8, 0.35, 0.65, 0.05, 0.95)
+# (place along the side, further out) for a hero, in the order they are tried
+HERO_SPOTS = ((0.5, 0.0), (0.2, 0.0), (0.8, 0.0), (0.35, 0.012), (0.65, 0.012), (0.05, 0.0), (0.95, 0.0),
+              (0.5, 0.03), (0.65, 0.03), (0.35, 0.03))
+DEPLOY_TRIES = 14         # rounds per troop card before the rest is given up
 MAX_SEARCHES = 60
 UNKNOWN_RELAUNCH = 16     # unknown pictures in a row until the game is restarted
 BOOT_TIMEOUT = 240
@@ -628,13 +633,13 @@ class Bot:
             outward = self._deploy(shot, slot, sides, span, outward)
 
         if settings["siege"]:
-            middle = shot.px(army.line_points(sides[:1], 3, outward)[1])
-            for slot in (s for s in slots if s.role == "siege"):
-                self._tap((slot.x, slot.y), 0.15)
-                self._tap(middle, 0.15)
+            for slot in (s for s in slots if s.role == "siege" and s.count):
+                self._deploy(shot, slot, sides[:1], (0.5, 0.5), outward)
         heroes = []
         if settings["heroes"]:
-            heroes = [s for s in slots if s.role == "hero" and self._deploy_hero(shot, s, sides, outward)]
+            spots = list(HERO_SPOTS)
+            heroes = [s for s in slots if s.role == "hero"
+                      and self._deploy_hero(shot, s, sides, outward, spots)]
         abilities = self._plan_abilities(heroes, wardens)
         self.log(f"Army deployed after {self.clock() - started:.0f} s.")
 
@@ -682,12 +687,22 @@ class Bot:
         return side
 
     def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> float:
-        """Places all troops of one card, spread evenly. Returns how far outwards it had to go."""
+        """Places all troops of one card, however many there are: spread along the whole line first,
+        what is left at single places. Returns the line (distance outwards) on which troops landed."""
         remaining = slot.count
         step = LINE_STEPS.index(outward) if outward in LINE_STEPS else 0
-        for _ in range(10):
+        landed = outward
+        used = 0  # single places tried on this line
+        for attempt in range(DEPLOY_TRIES):
             self._tap((slot.x, slot.y), TAP_PAUSE)
-            points = [shot.px(p) for p in army.line_points(sides, min(remaining, 40), LINE_STEPS[step], span)]
+            whole = attempt == 0 or remaining > len(SPOTS)
+            if whole:
+                places = army.line_points(sides, min(remaining, 40), LINE_STEPS[step], span)
+            else:
+                places = [army.spot(sides[n % len(sides)], SPOTS[n % len(SPOTS)], LINE_STEPS[step])
+                          for n in range(used, used + remaining)]
+                used += remaining
+            points = [shot.px(p) for p in places]
             for first in range(0, len(points), 8):
                 if first:
                     self._wait(BATCH_PAUSE)
@@ -700,25 +715,31 @@ class Bot:
                 left = army.card_count(self._shot(), slot.left, slot.right)
             if not left:  # counter gone or x0: everything is deployed
                 return LINE_STEPS[step]
-            if left >= remaining:
-                # Nothing arrived: red line or edge of the map, try a line next to this one
+            if left < remaining:
+                landed = LINE_STEPS[step]
+            elif whole or used >= len(SPOTS):
+                # Nothing arrives here: red line or edge of the map, try a line next to this one
                 if step + 1 >= len(LINE_STEPS):
                     break
-                step += 1
+                step, used = step + 1, 0
             remaining = left
         self.log(f"{remaining} troops could not be deployed.", "warn")
-        return LINE_STEPS[step]
+        return landed
 
-    def _deploy_hero(self, shot, slot, sides, outward: float) -> bool:
+    def _deploy_hero(self, shot, slot, sides, outward: float, spots: list) -> bool:
         """Places one hero. The card is only tapped again while it is clearly still waiting,
-        because a second tap on a placed hero uses up the ability."""
+        because a second tap on a placed hero uses up the ability. spots: places to try; the one
+        that works moves to the front for the next hero."""
         if army.hero_deployed(shot.image, slot.left, slot.right):
-            return False  # already grey before the battle: the hero is not available
-        for extra in HERO_STEPS:
+            return False  # grey before the battle: the hero is not available (for example upgrading)
+        for place in list(spots):
+            along, extra = place
             self._tap((slot.x, slot.y), 0.15)
-            self._tap(shot.px(army.line_points(sides[:1], 3, outward + extra)[1]), 0.5)
+            self._tap(shot.px(army.spot(sides[0], along, outward + extra)), 0.5)
             for _ in range(2):
                 if army.hero_deployed(self._shot().image, slot.left, slot.right):
+                    spots.remove(place)
+                    spots.insert(0, place)
                     return True
                 self._wait(0.4)
         self.log("A hero could not be deployed.", "warn")

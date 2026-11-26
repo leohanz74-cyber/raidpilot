@@ -49,6 +49,13 @@ While the bot runs, Windows does not go to sleep on its own; the screen may turn
 sleep yourself (power button, menu, closing the lid), everything stops, the bot included. The app takes a
 lower processor priority than the emulator and works at a calm, fixed pace to keep the game smooth.
 
+## Your army
+
+Nothing about the army is fixed: every battle the troop bar is read again, so any number of troops and
+heroes works (it depends on the Town Hall). A hero whose card is grey or missing, for example one that is
+not available, is left out. If a building makes part of the deployment side red, other places along that
+side are tried.
+
 ## When a battle ends
 
 At the latest 90 seconds after the first troop; earlier when no new loot arrived for 22 seconds (not before

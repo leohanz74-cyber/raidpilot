@@ -5,7 +5,7 @@ import numpy as np
 
 W, H = 1600, 900
 CARD = 108
-HEROES = ("king", "queen", "warden")
+HEROES = ("king", "queen", "warden", "champion")
 # The builder list: headers and other buildings first, the walls far down
 OTHER_ROWS = ("Suggested upgrades", "Laboratory", "Elixir Collector", "Other upgrades", "Dragon Duke",
               "Spiky Tower", "Monolith", "Clan Castle", "Spell Factory", "Gold Mine x 5", "Gold Storage x 4",
@@ -31,6 +31,8 @@ class FakeGame:
         self.chest_taps = 0
         self.chest_on_battle = False   # a reward pops up instead of the attack menu
         self.menu_claim = False        # the attack menu offers a reward
+        self.roster = None        # another army than the usual one
+        self.red = []             # (x, y, radius): places outside the base that are red as well
         self.serial = ""
         self.configured = ""
         self.path = "fake-adb"
@@ -56,6 +58,8 @@ class FakeGame:
                      ["siege", 1, (200, 150, 70), 387], ["king", None, (40, 90, 220), 508],
                      ["queen", None, (60, 200, 190), 629], ["warden", None, (200, 40, 180), 750],
                      ["rage", 5, (210, 90, 210), 885]]
+        if self.roster:
+            self.army = [list(card) for card in self.roster]
 
     def clock(self):
         return self.now
@@ -238,6 +242,7 @@ class FakeGame:
     def _deploy(self, x, y):
         name, count = self.army[self.selected][:2]
         inside_base = abs(x / W - 0.505) / 0.37 + abs(y / H - 0.455) / 0.40 < 1
+        inside_base = inside_base or any((x - rx) ** 2 + (y - ry) ** 2 < r * r for rx, ry, r in self.red)
         if inside_base and name != "rage":
             self.events.append("redzone")
             return
