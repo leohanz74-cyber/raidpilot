@@ -79,13 +79,19 @@ class Api:
         if ok:
             (folder / f"{name}.png").write_bytes(data.tobytes())
 
+    def _find_update(self):
+        """Version number of a newer release, or None."""
+        self._update = updater.check()
+        if not self._update:
+            return None
+        self._log(f"Update {self._update['version']} is available.", "good")
+        return self._update["version"]
+
     def _look_for_update(self) -> None:
         try:
-            self._update = updater.check()
-            if self._update:
-                self._log(f"Update {self._update['version']} is available.", "good")
-        except updater.UpdateError:
-            pass
+            self._find_update()
+        except updater.UpdateError as exc:
+            self._log(f"Update check failed: {exc}", "warn")
 
     def _player(self) -> str:
         return store.load(PROFILE, {}).get("player", "")
@@ -241,6 +247,13 @@ class Api:
         self._log.clear()
 
     # ---------- updates and window ----------
+    @api_call
+    def check_update(self):
+        version = self._find_update()
+        if not version:
+            self._log(f"RaidPilot {VERSION} is up to date.")
+        return {"update": version}
+
     @api_call
     def install_update(self):
         if not self._update:

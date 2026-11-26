@@ -44,6 +44,10 @@ select option{background:var(--raised)}
 .ghost{background:var(--raised);border:1px solid var(--line);border-radius:10px;padding:9px 12px;flex:1}
 .ghost:hover:not(:disabled),.primary:hover:not(:disabled){border-color:var(--accent);filter:brightness(1.07)}
 .ghost.small{flex:none;padding:6px 12px;font-size:12.5px}
+.hint{color:var(--muted);font-size:12px}
+.hint:empty{display:none}
+.hint.good{color:var(--good)}
+.hint.bad{color:var(--bad)}
 
 .power{width:100%;background:var(--accent);color:#000;font-weight:800;font-size:19px;letter-spacing:2px;border-radius:14px;padding:13px}
 .power:hover:not(:disabled){filter:brightness(1.08)}

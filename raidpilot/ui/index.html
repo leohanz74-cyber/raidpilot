@@ -43,6 +43,11 @@
   </section>
 
   <section class="page" data-page="settings" hidden>
+    <div class="card row">
+      <div><div>Version <b id="version"></b></div><div class="hint" id="update-state" role="status"></div></div>
+      <button class="ghost small" id="check-update">Check for Updates</button>
+    </div>
+
     <div class="card stack">
       <label class="row">Select Device<select id="device"></select></label>
       <div class="row"><span id="device-status" class="device-status">Searching…</span><button class="ghost small" id="refresh">Refresh</button></div>

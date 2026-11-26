@@ -21,7 +21,8 @@ copy /y requirements.txt ".venv\installed.txt" >nul
 
 :run
 start "" "%~dp0.venv\Scripts\pythonw.exe" -m raidpilot
-exit /b 0
+rem "exit" without /b also closes the window that the update restart opens
+exit
 
 :nopython
 echo.

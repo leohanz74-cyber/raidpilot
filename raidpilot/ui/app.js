@@ -222,6 +222,19 @@ $("#update-banner").onclick = async e => {
   if (result.ok) banner.textContent = "Restarting…"; else banner.disabled = false;
 };
 
+$("#check-update").onclick = async e => {
+  const button = e.currentTarget, note = $("#update-state");
+  button.disabled = true;
+  note.className = "hint";
+  note.textContent = "Checking…";
+  const result = await call("check_update");
+  button.disabled = false;
+  if (!result.ok) { note.className = "hint bad"; note.textContent = result.error; return; }
+  note.className = "hint good";
+  note.textContent = result.update ? `Version ${result.update} is available. Click "Install" at the top.`
+    : "You are up to date.";
+};
+
 // ---------- start ----------
 async function boot() {
   const data = await call("boot");
@@ -233,6 +246,7 @@ async function boot() {
         option.disabled = (data.unavailable[name] || []).includes(value);
         return option;
       }));
+  $("#version").textContent = data.version;
   applySettings(data.settings);
   showSaved(data.event_troops);
   poll();

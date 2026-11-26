@@ -192,6 +192,21 @@ def test_window_api(ocr):
     assert poll["ok"] and not poll["running"] and poll["lifetime"]["attacks"] == 0
 
 
+def test_check_for_updates_button(ocr, monkeypatch):
+    api = Api(adb=FakeGame(), ocr=ocr, emulator=None, check_updates=False)
+    monkeypatch.setattr(updater, "check", lambda: None)
+    assert api.check_update() == {"ok": True, "update": None} and api.poll()["update"] is None
+    monkeypatch.setattr(updater, "check", lambda: {"version": "9.0.0", "assets": []})
+    assert api.check_update()["update"] == "9.0.0" and api.poll()["update"] == "9.0.0"
+
+    def offline():
+        raise updater.UpdateError("No connection to GitHub.")
+
+    monkeypatch.setattr(updater, "check", offline)
+    assert api.check_update() == {"ok": False, "error": "No connection to GitHub."}
+    assert api.poll()["update"] == "9.0.0"  # what was found before stays offered
+
+
 def _zip(files):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:

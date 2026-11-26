@@ -64,8 +64,12 @@ The **Log** tab says which step failed. Log file, settings and the latest pictur
 
 ## Updates
 
-Push a new number in `raidpilot/version.py` to `main`. GitHub builds the installer and the source
-package, and the app then offers "Install version …".
+The app looks for a new version at every start and when you press **Check for Updates** on the
+**Settings** tab. "Install version …" at the top downloads it, installs it and restarts the app. Nothing
+is installed without that click.
+
+To publish one: push a new number in `raidpilot/version.py` to `main`. GitHub builds the installer and
+the source package.
 
 ## Development
 
