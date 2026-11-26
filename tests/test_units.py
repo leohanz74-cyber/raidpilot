@@ -1,5 +1,6 @@
 import hashlib
 import io
+import sys
 import zipfile
 
 import cv2
@@ -147,9 +148,24 @@ def test_cards_are_found_over_dark_and_bright_villages(background):
         assert abs(left - expected) <= 6 and abs(right - expected - 110) <= 6, cards
 
 
-def test_windows_is_only_kept_awake_on_windows():
-    assert power.keep_awake(True) is False and power.keep_awake(False) is False
-    power.lower_priority()
+def test_keep_awake_and_priority():
+    on_windows = sys.platform == "win32"
+    assert power.keep_awake(True) is on_windows and power.keep_awake(False) is on_windows
+    if not on_windows:
+        power.lower_priority()  # does nothing elsewhere
+        return
+    import ctypes
+
+    kernel = ctypes.WinDLL("kernel32")
+    kernel.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel.GetPriorityClass.argtypes = [ctypes.c_void_p]
+    kernel.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    before = kernel.GetPriorityClass(kernel.GetCurrentProcess())
+    try:
+        power.lower_priority()
+        assert kernel.GetPriorityClass(kernel.GetCurrentProcess()) == 0x4000  # below normal
+    finally:
+        kernel.SetPriorityClass(kernel.GetCurrentProcess(), before)
 
 
 def test_captured_event_troop_is_recognised(ocr):
