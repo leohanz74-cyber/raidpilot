@@ -80,15 +80,30 @@ def card_count(screen, left: int, right: int):
 
 
 def hero_deployed(image, left: int, right: int) -> bool:
-    """A green health bar in a dark frame above the card means the hero is on the field."""
+    """True once the hero is on the field: grey card art, or a green health bar above the card."""
     height = image.shape[0]
+    art = image[int(layout.HERO_ART[0] * height):int(layout.HERO_ART[1] * height), left + 12:right - 12]
+    if art.size and float(cv2.cvtColor(art, cv2.COLOR_BGR2HSV)[:, :, 1].mean()) < 40:
+        return True
+    top, bottom = (int(v * height) for v in layout.HERO_BAR)
+    strip = image[top:bottom, left + 10:right - 10]
+    if strip.size == 0:
+        return False
+    # Pure green, unlike grass; a bar fills most of the width for several rows
+    green = cv2.inRange(cv2.cvtColor(strip, cv2.COLOR_BGR2HSV), (40, 190, 140), (75, 255, 255))
+    return int(((green.mean(axis=1) / 255) > 0.5).sum()) >= 5
 
-    def band(rows):
-        return image[int(rows[0] * height):int(rows[1] * height), left + 10:right - 10]
 
-    # The pure green of the bar and the frame tell it apart from grass behind the card
-    return (_share(band(layout.HERO_BAR), (40, 190, 140), (75, 255, 255)) > 0.35
-            and _share(band(layout.HERO_FRAME), (0, 0, 0), (180, 255, 90)) > 0.8)
+def is_warden(image, left: int, right: int) -> bool:
+    """Recognises the Grand Warden on a waiting (colourful) card: purple art or the ground/air switch."""
+    height = image.shape[0]
+    width = right - left
+    switch = image[int(layout.WARDEN_SWITCH[0] * height):int(layout.WARDEN_SWITCH[1] * height),
+                   left + int(width * 0.55):right - int(width * 0.08)]
+    if _share(switch, (35, 90, 130), (80, 255, 255)) > 0.35:
+        return True
+    art = image[int(0.850 * height):int(0.978 * height), left + 6:right - 6]
+    return _share(art, (135, 90, 60), (165, 255, 255)) > 0.28
 
 
 def _share(patch, low, high) -> float:

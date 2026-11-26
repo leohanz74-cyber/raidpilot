@@ -109,8 +109,10 @@ def test_troop_bar_roles(ocr):
     shot = scouting(ocr)
     slots = army.assign_roles(shot, army.detect_slots(shot))
     assert [(s.role, s.count) for s in slots] == [
-        ("troop", 14), ("event", 30), ("siege", 1), ("hero", None), ("hero", None), ("spell", 5)]
-    assert [s.index for s in army.choose_spells(shot.image, slots, "rage")] == [5]
+        ("troop", 14), ("event", 30), ("siege", 1), ("hero", None), ("hero", None), ("hero", None), ("spell", 5)]
+    wardens = [s for s in slots if s.role == "hero" and army.is_warden(shot.image, s.left, s.right)]
+    assert [s.index for s in wardens] == [5]
+    assert [s.index for s in army.choose_spells(shot.image, slots, "rage")] == [6]
     assert army.choose_spells(shot.image, slots, "none") == []
     assert shot.loot() == (100_000, 120_000, 800)
 
@@ -205,6 +207,14 @@ def test_raw_screenshot_is_decoded():
     warned = b"[Warning] Multiple displays were found\nUsing the first one\n" + header + pixels.tobytes()
     assert decode_raw(warned).shape == (4, 6, 3)
     assert decode_raw(b"\x89PNG" + bytes(40)) is None
+
+
+def test_a_lost_leading_digit_is_repaired():
+    from raidpilot.screen import _pick
+
+    assert _pick(15_595_758, 5_595_758) == 15_595_758
+    assert _pick(5_595_758, 15_595_758) == 15_595_758
+    assert _pick(None, 42) == 42 and _pick(7_000, 9_000) == 7_000
 
 
 def test_decorations_are_not_read_as_loot():

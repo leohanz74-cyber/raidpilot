@@ -1,4 +1,5 @@
 """End to end: the real automation with real text recognition against the simulated game."""
+import pytest
 from raidpilot import settings
 from raidpilot.bot import Bot
 from raidpilot.logbook import Log
@@ -45,10 +46,13 @@ def test_afk_from_powered_off_emulator(ocr):
 
 def test_all_toggles(ocr):
     game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.endless = True  # long enough for the hero abilities
     bot, _, log = run_bot(game, ocr, heroes=True, siege=True, event_troops=True, spell="none")
     assert not bot.last_error, log
-    assert game.deployed == {"dragon": 14, "event": 30, "siege": 1, "king": 1, "queen": 1}, log
-    assert {"ability:king", "ability:queen"} <= set(game.events)
+    assert game.deployed == {"dragon": 14, "event": 30, "siege": 1, "king": 1, "queen": 1, "warden": 1}, log
+    # Every ability exactly once, the Grand Warden last
+    abilities = [e for e in game.events if e.startswith("ability:")]
+    assert abilities == ["ability:king", "ability:queen", "ability:warden"], (abilities, log)
 
 
 def test_several_attacks_in_a_row(ocr):
@@ -66,7 +70,7 @@ def test_battle_without_new_loot_is_ended_early(ocr):
     bot, stats, log = run_bot(game, ocr, spell="none")
     assert not bot.last_error, log
     assert "end" in game.events and stats.session["attacks"] == 1, log
-    assert 30 <= game.raid_ended - game.raid_started <= 80, log
+    assert 45 <= game.raid_ended - game.raid_started <= 95, log
 
 
 def test_game_is_not_relaunched_when_the_village_is_open(ocr):
@@ -74,6 +78,38 @@ def test_game_is_not_relaunched_when_the_village_is_open(ocr):
     bot, _, log = run_bot(game, ocr)
     assert not bot.last_error and "launch" not in game.events, log
     assert game.events.count("zoom:home") == 1
+
+
+@pytest.mark.parametrize("gold,tried", [(12_500_000, True), (11_000_000, False)])
+def test_walls_start_at_half_full_storage(ocr, gold, tried):
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(gold, 1_000_000))
+    bot, _, log = run_bot(game, ocr, walls=True, max_storage=24_000_000)
+    assert not bot.last_error, log
+    assert ("No wall was found in the builder list." in log) == tried, log
+
+
+def test_loot_counts_when_stopped_during_a_battle(ocr):
+    game = FakeGame(loots=[(900_000, 900_000, 0)])
+    game.endless = True
+    holder = []
+    original = game.screenshot
+
+    def screenshot():
+        if game.state == "battle" and game.ticks >= 10 and holder:
+            holder[0].stop()
+        return original()
+
+    game.screenshot = screenshot
+    log = Log(to_file=False)
+    config = settings.load()
+    config["spell"] = "none"
+    stats = Stats("t")
+    bot = Bot(game, ocr, lambda: config, stats, log, clock=game.clock, sleep=game.sleep)
+    holder.append(bot)
+    bot.run()
+    texts = [line["text"] for line in log.since()]
+    assert any(t.startswith("Stopped during a battle") for t in texts), texts
+    assert stats.session["attacks"] == 1 and 0 < stats.session["gold"] < 900_000
 
 
 def test_stops_when_storage_full(ocr):

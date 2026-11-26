@@ -5,6 +5,7 @@ import numpy as np
 
 W, H = 1600, 900
 CARD = 108
+HEROES = ("king", "queen", "warden")
 
 
 class FakeGame:
@@ -33,7 +34,8 @@ class FakeGame:
         # name, count (None = hero), colour, left edge
         self.army = [["dragon", 14, (60, 190, 90), 118], ["event", 30, (60, 180, 90), 253],
                      ["siege", 1, (200, 150, 70), 387], ["king", None, (40, 90, 220), 508],
-                     ["queen", None, (190, 70, 150), 629], ["rage", 5, (210, 90, 210), 885]]
+                     ["queen", None, (60, 200, 190), 629], ["warden", None, (200, 40, 180), 750],
+                     ["rage", 5, (210, 90, 210), 885]]
 
     def clock(self):
         return self.now
@@ -110,7 +112,7 @@ class FakeGame:
                 for index, (name, _, _, left) in enumerate(self.army):
                     if left <= x <= left + CARD:
                         self.events.append("card:" + name)
-                        if name in ("king", "queen") and self.deployed.get(name):
+                        if name in HEROES and self.deployed.get(name):
                             self.events.append("ability:" + name)
                         self.selected = index
             elif self.selected is not None:
@@ -179,8 +181,8 @@ class FakeGame:
 
         spaced = lambda n: f"{n:,}".replace(",", " ")
         if self.state in ("home", "welcome", "menu", "army"):
-            text(spaced(self.storage[0]), 1360, 40, 0.9)
-            text(spaced(self.storage[1]), 1360, 103, 0.9)
+            text(spaced(self.storage[0]), 1365, 55, 0.9)
+            text(spaced(self.storage[1]), 1365, 118, 0.9)
             text("TestChief", 135, 75, 0.9)
             button("Build", 1495, 855, 120)
             text("1/6", 1455, 700, 0.9)
@@ -207,19 +209,23 @@ class FakeGame:
             if self.state == "scout":
                 button("Next", 1491, 617, 120, h=90)
             cv2.rectangle(image, (0, 735), (W, H), (32, 32, 32), -1)
-            for name, count, color, left in self.army:
+            for index, (name, count, color, left) in enumerate(self.army):
                 used = count == 0
+                placed = name in HEROES and self.deployed.get(name)
+                if placed:
+                    color = (125, 125, 125)
                 cv2.rectangle(image, (left, 746), (left + CARD, 884), (70, 70, 70) if used else color, -1)
-                cv2.circle(image, (left + 54, 835), 24, (60, 60, 60) if used else (30, 220, 240), -1)
+                cv2.circle(image, (left + 54, 835), 24, (60, 60, 60) if used else color if placed else (30, 220, 240), -1)
                 if name == "rage" and not used:
                     cv2.rectangle(image, (left + 8, 786), (left + CARD - 8, 876), color, -1)
                 if name == "event" and not used:
                     cv2.rectangle(image, (left + 6, 749), (left + 37, 779), (170, 215, 250), -1)
                 if count is not None:
                     text(f"x{count}", left + 44, 776, 0.8)
-                elif self.deployed.get(name):
-                    cv2.rectangle(image, (left + 4, 710), (left + CARD - 4, 734), (25, 25, 25), -1)
-                    cv2.rectangle(image, (left + 8, 719), (left + CARD - 8, 733), (30, 235, 100), -1)
+                elif placed:
+                    raised = 3 if index == self.selected else 0
+                    cv2.rectangle(image, (left + 4, 710 - raised), (left + CARD - 4, 733 - raised), (25, 25, 25), -1)
+                    cv2.rectangle(image, (left + 8, 721 - raised), (left + CARD - 8, 729 - raised), (30, 235, 100), -1)
             if self.state == "confirm":
                 cv2.rectangle(image, (450, 250), (1150, 620), (225, 225, 225), -1)
                 text("Surrender battle?", 800, 320, 1.1, center=True)
@@ -227,10 +233,10 @@ class FakeGame:
                 button("Okay", 960, 560, color=(70, 170, 70))
         elif self.state == "result":
             text("Victory", 800, 130, 2.0, center=True)
-            text("You got:", 760, 359, 0.9, center=True)
-            for value, y in zip(self.got(), (394, 453, 512)):
-                text(spaced(value), 680, y + 8, 1.0)
-            text("2x", 940, 402, 0.9)
+            text("You got:", 802, 373, 0.9, center=True)
+            for value, y in zip(self.got(), (414, 474, 534)):
+                text(spaced(value), 765, y, 1.0, center=True)
+            text("2x", 960, 424, 0.9)
             text("100% Bonus:", 1200, 380, 0.8, center=True)
             for value, y in zip(self.bonus, (425, 480, 535)):
                 text("+" + str(value), 1150, y, 0.9)

@@ -12,17 +12,22 @@ from . import army, layout, notify, screen as screen_mod
 from .adb import AdbError
 from .mumu import MumuError
 
-MAX_BATTLE = 75           # seconds after the first troop until a battle is ended at the latest
-MIN_BATTLE = 40           # never end for lack of loot before this
-STALE_AFTER = 18          # seconds without new loot
+MAX_BATTLE = 90           # seconds after the first troop until a battle is ended at the latest
+MIN_BATTLE = 50           # never end for lack of loot before this
+STALE_AFTER = 22          # seconds without new loot
 LOOT_DONE = 0.05          # end once only this share of the loot is left ...
 LOOT_DONE_AFTER = 20      # ... and at least this many seconds have passed
 SPELL_DELAY = 7
-ABILITY_DELAY = 12
+ABILITY_DELAY = 12        # seconds after the heroes are placed
+WARDEN_GAP = 5            # the Grand Warden's ability comes this much after all others
+LINE_STEPS = (0.0, 0.012, -0.025, -0.045, -0.065)   # tried in turn when nothing lands on the line
+HERO_STEPS = (0.0, -0.03, 0.025)
 MAX_SEARCHES = 60
 UNKNOWN_RELAUNCH = 16     # unknown pictures in a row until the game is restarted
 BOOT_TIMEOUT = 240
 WALLS_PER_VISIT = 5
+WALL_TRIGGER = 0.5        # walls are upgraded once a storage is this full
+WALL_PAUSE = 5            # village visits without a new try after walls did not work
 
 
 class Stop(Exception):
@@ -52,6 +57,8 @@ class Bot:
         self.on_player = on_player
         self.on_capture = on_capture
         self._zoomed = False
+        self._counted = False
+        self._wall_pause = 0
         self._stop = threading.Event()
         self._thread = None
         self.status = "Ready"
@@ -88,6 +95,7 @@ class Bot:
         self.failures = 0
         self._warned = set()
         self._zoomed = False
+        self._wall_pause = 0
         adb_errors = 0
         reason = "Stopped"
         try:
@@ -264,6 +272,7 @@ class Bot:
             self.size = (width, height)
             self.log("Village found.", "good")
             return
+        self._capture("start", screen_mod.Screen(image, self.ocr))
         self.status = "Starting game…"
         self.log("Opening Clash of Clans…")
         self.adb.launch_game()
@@ -329,6 +338,8 @@ class Bot:
                 self._wait(1.5)
                 continue
             unknown += 1
+            if unknown == 4:
+                self._capture("unrecognised", shot)
             if unknown == 6:
                 self.adb.launch_game()
                 self._wait(4)
@@ -402,9 +413,12 @@ class Bot:
             self._warn_once("storage", "The storage amounts at the top right cannot be read.")
             return
         capacity = settings["max_storage"]
-        if settings["walls"] and max(values) >= capacity * 0.9:
-            self._upgrade_walls(settings)
-            values = self._go_home().storage() or values
+        if settings["walls"] and max(values) >= capacity * WALL_TRIGGER:
+            if self._wall_pause:
+                self._wall_pause -= 1
+            else:
+                self._upgrade_walls(settings)
+                values = self._go_home().storage() or values
         if settings["stop_full"] and min(values) >= capacity * 0.98:
             raise Done("Storages are full.")
 
@@ -505,6 +519,7 @@ class Bot:
         span = army.line_span(settings["army"])
         names = {"tl": "Top Left", "tr": "Top Right", "bl": "Bottom Left", "br": "Bottom Right"}
         self.log("Deploying from: " + ", ".join(names[s] for s in sides))
+        wardens = {s.index for s in slots if s.role == "hero" and army.is_warden(shot.image, s.left, s.right)}
         started = self.clock()
         outward = 0.0
         for slot in troops:
@@ -518,6 +533,7 @@ class Bot:
         heroes = []
         if settings["heroes"]:
             heroes = [s for s in slots if s.role == "hero" and self._deploy_hero(shot, s, sides, outward)]
+        abilities = self._plan_abilities(heroes, wardens)
         self.log(f"Army deployed after {self.clock() - started:.0f} s.")
 
         spells = army.choose_spells(shot.image, slots, settings["spell"])
@@ -531,15 +547,15 @@ class Bot:
         elif settings["spell"] != "none":
             self._warn_once("spells", "No spells found in the army.")
         self._capture("last_deploy", self._shot())
-        self._watch_battle(loot, heroes, started)
+        self._watch_battle(loot, abilities, started)
 
     def _deploy(self, shot, slot, sides, span, outward: float = 0.0) -> float:
         """Places all troops of one card, spread evenly. Returns how far outwards it had to go."""
         remaining = slot.count
-        stuck = 0
+        step = LINE_STEPS.index(outward) if outward in LINE_STEPS else 0
         for _ in range(10):
             self._tap((slot.x, slot.y), 0.15)
-            points = [shot.px(p) for p in army.line_points(sides, min(remaining, 40), outward, span)]
+            points = [shot.px(p) for p in army.line_points(sides, min(remaining, 40), LINE_STEPS[step], span)]
             for first in range(0, len(points), 8):
                 self._check_stop()
                 self.adb.tap_many(points[first:first + 8])
@@ -549,79 +565,109 @@ class Bot:
                 self._wait(0.4)
                 left = army.card_count(self._shot(), slot.left, slot.right)
             if not left:  # counter gone or x0: everything is deployed
-                return outward
+                return LINE_STEPS[step]
             if left >= remaining:
-                # Nothing arrived: probably inside the red line, move further out
-                stuck += 1
-                outward += 0.025
-                if stuck >= 4:
+                # Nothing arrived: red line or edge of the map, try a line next to this one
+                if step + 1 >= len(LINE_STEPS):
                     break
+                step += 1
             remaining = left
         self.log(f"{remaining} troops could not be deployed.", "warn")
-        return outward
+        return LINE_STEPS[step]
 
     def _deploy_hero(self, shot, slot, sides, outward: float) -> bool:
-        for extra in (0.0, 0.04, 0.09):
+        """Places one hero. The card is only tapped again while it is clearly still waiting,
+        because a second tap on a placed hero uses up the ability."""
+        if army.hero_deployed(shot.image, slot.left, slot.right):
+            return False  # already grey before the battle: the hero is not available
+        for extra in HERO_STEPS:
             self._tap((slot.x, slot.y), 0.15)
             self._tap(shot.px(army.line_points(sides[:1], 3, outward + extra)[1]), 0.5)
-            if army.hero_deployed(self._shot().image, slot.left, slot.right):
-                return True
+            for _ in range(2):
+                if army.hero_deployed(self._shot().image, slot.left, slot.right):
+                    return True
+                self._wait(0.4)
         self.log("A hero could not be deployed.", "warn")
         return False
 
-    def _watch_battle(self, loot, heroes, started) -> None:
+    def _plan_abilities(self, heroes, wardens) -> list:
+        """[(time, cards, log text)]: all other heroes first, the Grand Warden afterwards."""
+        now = self.clock()
+        others = [s for s in heroes if s.index not in wardens]
+        warden = [s for s in heroes if s.index in wardens]
+        plan = []
+        if others:
+            plan.append((now + ABILITY_DELAY, others, "Hero abilities activated."))
+        if warden:
+            plan.append((now + ABILITY_DELAY + WARDEN_GAP, warden, "Grand Warden ability activated."))
+        return plan
+
+    def _use_abilities(self, plan: list) -> None:
+        while plan and self.clock() >= plan[0][0]:
+            _, cards, text = plan.pop(0)
+            for slot in cards:
+                self._tap((slot.x, slot.y), 0.2)
+            self.log(text)
+
+    def _watch_battle(self, loot, abilities, started) -> None:
         self.status = "Battle in progress…"
         total = loot[0] + loot[1]
         remaining = total
         last_loot = loot
         progress = self.clock()
-        ability_used = not heroes
         lost = nearly_empty = 0
-        while True:
-            self._wait(1.0)
-            if not ability_used and self.clock() - started >= ABILITY_DELAY:
-                for slot in heroes:
-                    self._tap((slot.x, slot.y), 0.15)
-                ability_used = True
-            shot = self._shot()
-            leave = shot.button("end_battle", thorough=lost >= 2)
-            if not leave:
-                if shot.button("return_home"):
+        self._counted = False
+        try:
+            while True:
+                self._wait(1.0)
+                shot = self._shot()
+                leave = shot.button("end_battle", thorough=lost >= 2)
+                if not leave:
+                    if shot.button("return_home"):
+                        break
+                    lost += 1
+                    if lost >= 12:
+                        self.failures += 1
+                        self.log("The battle screen disappeared.", "warn")
+                        return
+                    continue
+                lost = 0
+                self._use_abilities(abilities)  # only while the battle is on screen
+                now_loot = shot.loot()
+                if now_loot and now_loot[0] + now_loot[1] <= total * 1.02:  # more than at the start: misread
+                    left = now_loot[0] + now_loot[1]
+                    if left <= remaining - max(1000, total // 200):
+                        progress = self.clock()
+                        remaining, last_loot = left, now_loot
+                    elif left > remaining:  # an earlier picture was misread
+                        remaining, last_loot = left, now_loot
+                    nearly_empty = nearly_empty + 1 if left <= total * LOOT_DONE else 0
+                elapsed = self.clock() - started
+                reason = None
+                if elapsed >= MAX_BATTLE:
+                    reason = "Time limit reached"
+                elif nearly_empty >= 2 and elapsed >= LOOT_DONE_AFTER:
+                    reason = "Almost all loot taken"
+                elif elapsed >= MIN_BATTLE and self.clock() - progress >= STALE_AFTER:
+                    reason = "No more loot coming in"
+                if reason:
+                    self.log(f"{reason}, ending the battle after {elapsed:.0f} s.")
+                    self._capture("last_battle_end", shot)
+                    self._end_battle(leave)
+                    shot, name, _ = self._wait_for(("return_home",), 25)
+                    if not name:
+                        self.failures += 1
+                        return
                     break
-                lost += 1
-                if lost >= 12:
-                    self.failures += 1
-                    self.log("The battle screen disappeared.", "warn")
-                    return
-                continue
-            lost = 0
-            now_loot = shot.loot()
-            if now_loot and now_loot[0] + now_loot[1] <= total * 1.02:  # more than at the start: misread
-                left = now_loot[0] + now_loot[1]
-                if left <= remaining - max(1000, total // 200):
-                    progress = self.clock()
-                    remaining, last_loot = left, now_loot
-                elif left > remaining:  # an earlier picture was misread
-                    remaining, last_loot = left, now_loot
-                nearly_empty = nearly_empty + 1 if left <= total * LOOT_DONE else 0
-            elapsed = self.clock() - started
-            reason = None
-            if elapsed >= MAX_BATTLE:
-                reason = "Time limit reached"
-            elif nearly_empty >= 2 and elapsed >= LOOT_DONE_AFTER:
-                reason = "Almost all loot taken"
-            elif elapsed >= MIN_BATTLE and self.clock() - progress >= STALE_AFTER:
-                reason = "No more loot coming in"
-            if reason:
-                self.log(f"{reason}, ending the battle after {elapsed:.0f} s.")
-                self._capture("last_battle_end", shot)
-                self._end_battle(leave)
-                shot, name, _ = self._wait_for(("return_home",), 25)
-                if not name:
-                    self.failures += 1
-                    return
-                break
-        self._finish(loot, last_loot)
+            self._finish(loot, last_loot)
+        except Stop:
+            # Stopped in the middle of a battle: count what is already taken
+            gold, elixir = (max(0, a - b) for a, b in zip(loot[:2], last_loot[:2]))
+            if not self._counted and gold + elixir:
+                self.stats.add(gold=gold, elixir=elixir, attacks=1)
+                self.log(f"Stopped during a battle: +{notify.short(gold)} gold, "
+                         f"+{notify.short(elixir)} elixir so far.", "good")
+            raise
 
     def _finish(self, first, last) -> None:
         self.status = "Reading result…"
@@ -637,11 +683,14 @@ class Bot:
             if settled:
                 break
         self._capture("last_result", shot)
+        taken = tuple(max(0, a - b) for a, b in zip(first, last))  # what disappeared from the opponent
         if result is None or max(result) > 40_000_000:
-            # Fallback: what disappeared from the opponent
-            result = tuple(max(0, a - b) for a, b in zip(first, last))
-        gold, elixir, dark = result
+            result = taken
+        # A result with fewer digits than what was seen leaving the opponent is a misreading
+        gold, elixir = (t if len(str(r)) < len(str(t)) else r for r, t in zip(result[:2], taken[:2]))
+        dark = result[2]
         self.stats.add(gold=gold, elixir=elixir, dark=dark, attacks=1)
+        self._counted = True
         self.failures = 0
         self.log(f"Attack finished: +{notify.short(gold)} gold, +{notify.short(elixir)} elixir", "good")
         if self.stats.session["attacks"] % 10 == 0:
@@ -652,8 +701,10 @@ class Bot:
 
     # ---------- walls ----------
     def _find_wall_entry(self):
-        for _ in range(6):
+        for attempt in range(6):
             shot = self._shot()
+            if attempt == 0:
+                self._capture("walls_1_builder_menu", shot)
             for word in screen_mod.join_lines(shot.words(layout.REGIONS["builder_list"])):
                 if any(w in screen_mod.normalize(word.text) for w in layout.WALL_WORDS):
                     return shot, word
@@ -665,35 +716,34 @@ class Bot:
         for _ in range(WALLS_PER_VISIT):
             shot = self._go_home()
             before = shot.storage()
-            if not before or max(before) < settings["max_storage"] * 0.75:
+            if not before or max(before) < settings["max_storage"] * WALL_TRIGGER:
                 return
             if shot.free_builders() == 0:
-                self._warn_once("builder", "No free builder, walls are skipped for now.")
+                self._warn_once("builder", "No free builder: the game needs one for walls, skipping for now.")
                 return
             self.status = "Upgrading walls…"
             self._tap(shot.px(layout.POINTS["builder_menu"]), 1.5)
             shot, entry = self._find_wall_entry()
             if not entry:
-                self.adb.back()
-                self._warn_once("walls", "No wall was found in the builder list.")
+                self._give_up_walls("No wall was found in the builder list.")
                 return
             self._tap(tuple(int(v) for v in entry.center), 1.8)
             shot = self._shot()
+            self._capture("walls_2_selected", shot)
             region = layout.BUTTONS["upgrade"][0]
             buttons = sorted((w for w in shot.words(region) if screen_mod.normalize(w.text) == "upgrade"),
                              key=lambda w: w.x)
             if not buttons:
-                self.adb.back()
-                self._warn_once("walls", "No upgrade button was found for the wall.")
+                self._give_up_walls("No upgrade button was found for the wall.")
                 return
             # With two buttons the left one costs gold, the right one elixir
             choice = buttons[-1] if len(buttons) > 1 and before[1] > before[0] else buttons[0]
             self._tap(tuple(int(v) for v in choice.center), 1.5)
             shot = self._shot()
+            self._capture("walls_3_confirm", shot)
             confirm = None if shot.shows_gems() else shot.button("confirm")
             if not confirm:
-                self.adb.back()
-                self._warn_once("walls", "The wall upgrade was not confirmed (nothing was bought).")
+                self._give_up_walls("The wall upgrade was not confirmed (nothing was bought).")
                 return
             self._tap(confirm, 1.8)
             if self._shot().shows_gems():
@@ -704,8 +754,14 @@ class Bot:
                 self.stats.add(walls=1)
                 self.log("Wall upgraded.", "good")
             else:
+                self._wall_pause = WALL_PAUSE
                 self._warn_once("walls", "The wall upgrade did not go through.")
                 return
+
+    def _give_up_walls(self, why: str) -> None:
+        self.adb.back()
+        self._wall_pause = WALL_PAUSE  # do not lose time on it before every attack
+        self._warn_once("walls", why)
 
     # ---------- donations ----------
     def _donate(self) -> None:

@@ -35,9 +35,15 @@ LOOT_ROWS = (  # narrow enough to leave out the "2x" decorations to the right
 )
 # Orange area of the Battle button: darker when a window lies on top of the village
 BATTLE_PATCH = (0.0125, 0.939, 0.031, 0.967)
-# Health bar above a hero card once the hero is on the field, and the dark frame over the bar
-HERO_BAR = (0.801, 0.812)
-HERO_FRAME = (0.794, 0.798)
+# Hero cards: art is colourful while the hero waits and grey once the hero is on the field
+HERO_ART = (0.860, 0.950)
+HERO_BAR = (0.783, 0.826)     # the green health bar is somewhere in here (the selected card is raised)
+WARDEN_SWITCH = (0.940, 0.975)  # only the Grand Warden has the ground/air switch at the bottom right
+# Your own storages at the top right: gold, elixir (one line each)
+STORAGE_ROWS = (
+    (0.850, 0.027, 0.954, 0.078),
+    (0.850, 0.096, 0.954, 0.147),
+)
 # These labels must match completely ("End Battle" is not "Battle")
 EXACT = ("home_battle", "home_build")
 
@@ -63,8 +69,8 @@ POINTS = {
 
 # Deployment lines just outside the red boundary when the map is zoomed out completely
 SIDES = {
-    "tl": ((0.135, 0.435), (0.400, 0.092)),
-    "tr": ((0.605, 0.092), (0.865, 0.435)),
+    "tl": ((0.120, 0.428), (0.420, 0.052)),   # along the outer grass strip, outside the red line
+    "tr": ((0.580, 0.052), (0.880, 0.428)),
     "bl": ((0.135, 0.545), (0.300, 0.765)),
     "br": ((0.865, 0.540), (0.690, 0.775)),
 }
@@ -74,7 +80,7 @@ CENTER = (0.505, 0.455)
 BLOCKED = (
     (0.00, 0.00, 0.17, 0.28),   # enemy name and loot
     (0.76, 0.00, 1.00, 0.22),   # own resources
-    (0.42, 0.00, 0.58, 0.09),   # battle timer
+    (0.435, 0.00, 0.565, 0.10), # battle timer
     (0.00, 0.69, 0.14, 0.81),   # End Battle
     (0.81, 0.62, 1.00, 0.81),   # Next / damage
     (0.00, 0.80, 1.00, 1.00),   # troop bar

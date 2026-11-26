@@ -65,6 +65,15 @@ def parse_number(text: str):
     return int(fixed)
 
 
+def _pick(line_value, box_value):
+    """Chooses between two readings of the same number: a lost digit makes one of them shorter."""
+    if line_value is None:
+        return box_value
+    if box_value is not None and box_value != line_value and str(box_value).endswith(str(line_value)):
+        return box_value
+    return line_value
+
+
 class Screen:
     def __init__(self, image, ocr):
         self.image = image
@@ -183,19 +192,38 @@ class Screen:
 
     def result_loot(self):
         """(gold, elixir, dark elixir) gained according to the result screen, bonus included."""
-        values = self._below(layout.REGIONS["result"], "yougot", 0.24, 0.58)
-        if values is None or len(values) < 2:
+        found = self._below(layout.REGIONS["result"], "yougot", 0.24, 0.58)
+        if found is None:
             return None
-        values = (values + [0])[:3]
+        rows = self._result_rows()
+        values = [_pick(rows[i], found[i] if i < len(found) else None) for i in range(3)]
+        if values[0] is None or values[1] is None:
+            return None
+        values[2] = values[2] or 0
         bonus = self._below(layout.REGIONS["bonus"], "bonus", 0.20) or []
         return tuple(v + (bonus[i] if i < len(bonus) else 0) for i, v in enumerate(values))
 
+    def _result_rows(self) -> list:
+        """Reads the three result lines at their place below "You got". Detecting text boxes
+        sometimes cuts off a leading "1", reading the whole line does not."""
+        anchor = next(w for w in join_lines(self.words(layout.REGIONS["result"])) if "yougot" in normalize(w.text))
+        x, y = anchor.center[0] / self.width, anchor.center[1] / self.height
+        values = []
+        for index in range(3):
+            middle = y + 0.0444 + 0.0667 * index
+            region = (x - 0.125, middle - 0.0244, x + 0.0237, middle + 0.0244)
+            values.append(parse_number(self.line(region, 0.8)))
+        return values
+
     def storage(self):
-        """(gold, elixir) at the top right of the own village, or None."""
+        """(gold, elixir) at the top right of the screen, or None."""
+        rows = [parse_number(self.line(row, 0.7)) for row in layout.STORAGE_ROWS]
+        if None not in rows:
+            return (rows[0], rows[1])
         values = [v for v, _ in self.numbers(layout.REGIONS["home_storage"])]
         if len(values) < 2:
             return None
-        return (values[0], values[1])
+        return (_pick(rows[0], values[0]), _pick(rows[1], values[1]))
 
     def player_name(self) -> str:
         words = join_lines(self.words(layout.REGIONS["player_name"]))

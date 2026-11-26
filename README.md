@@ -37,7 +37,7 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 | Deploy Heroes Automatically | **Off by default.** Hero cards are never touched while off. |
 | Use Siege Machines | Deploys the siege machine card. |
 | Use Event Troops | Deploys cards with the event badge, plus icons saved with "Capture Event Troop". |
-| Auto Upgrade Walls (Beta) | Upgrades walls when a storage is nearly full. Never confirms gem dialogs. |
+| Auto Upgrade Walls (Beta) | Upgrades walls once gold or elixir reaches half of Max Storage Capacity. The game needs a free builder for this. Never confirms gem dialogs. |
 | Stop When Storage Is Full | Stops once gold and elixir are full. |
 | Donate Troops Before Attack (Beta) | Answers donation requests in the clan chat. Never spends gems. |
 
@@ -45,8 +45,13 @@ If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used i
 
 ## When a battle ends
 
-At the latest 75 seconds after the first troop; earlier when no new loot arrived for 18 seconds (not before
-second 40) or when almost nothing is left. The loot gained so far is kept; ending early can cost stars.
+At the latest 90 seconds after the first troop; earlier when no new loot arrived for 22 seconds (not before
+second 50) or when almost nothing is left. The loot gained so far is kept; ending early can cost stars.
+
+## Hero abilities
+
+With "Deploy Heroes Automatically" on, all heroes use their ability about 12 seconds after being placed;
+the Grand Warden follows 5 seconds later.
 
 ## When something is not recognised
 
