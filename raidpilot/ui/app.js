@@ -22,12 +22,12 @@ async function call(method, ...args) {
 
 const state = {settings: {}, running: false, lastLog: 0, generation: 0, lines: 0};
 
-function toast(text, bad = false) {
+function toast(text, bad = false, time = 3500) {
   const box = $("#toast");
   box.textContent = text;
   box.className = "show" + (bad ? " bad" : "");
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => box.className = "", 3500);
+  toast.timer = setTimeout(() => box.className = "", time);
 }
 async function must(method, ...args) {
   const result = await call(method, ...args);
@@ -251,6 +251,11 @@ async function boot() {
         return option;
       }));
   $("#version").textContent = data.version;
+  if (data.updated) {
+    const text = `Updated to version ${data.version}.`;
+    $("#update-state").textContent = text;
+    toast(text, false, 8000);
+  }
   applySettings(data.settings);
   showSaved(data.event_troops);
   poll();

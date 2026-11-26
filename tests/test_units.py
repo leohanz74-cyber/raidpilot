@@ -13,6 +13,7 @@ from raidpilot.api import Api
 from raidpilot.bot import Bot
 from raidpilot.mumu import Mumu, MumuError
 from raidpilot.screen import Screen, label_matches, parse_number
+from raidpilot.version import VERSION
 
 from .fakegame import FakeGame
 
@@ -256,6 +257,15 @@ def test_update_at_start_installs_itself_once(ocr, monkeypatch):
     assert again.poll()["auto_update"] is False and again.poll()["update"] == "9.0.0"
     assert again.install_update(True)["result"] is None and installed == ["9.0.0"]
     assert again.install_update()["result"] == "exit" and installed == ["9.0.0", "9.0.0"]
+
+
+def test_first_start_after_an_update_says_so(ocr):
+    start = lambda: Api(adb=FakeGame(), ocr=ocr, emulator=None, check_updates=False).boot()["updated"]
+    assert start() is False and start() is False          # a fresh install says nothing
+    store.save("update.json", {"ran": "0.0.1"})
+    assert start() is True and start() is False
+    store.save("update.json", {"tried": VERSION})         # updated from a version that did not note itself
+    assert start() is True and start() is False
 
 
 def test_update_never_interrupts_a_running_bot(ocr, monkeypatch):

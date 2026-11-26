@@ -53,6 +53,9 @@ class Api:
         self._auto = False          # install the update found at the start without asking
         self._installing = False
         self._log(f"RaidPilot {VERSION} started.")
+        self._updated = self._remember_version()
+        if self._updated:
+            self._log(f"Update installed: RaidPilot is now version {VERSION}.", "good")
         threading.Thread(target=self._warm_up, daemon=True).start()
         if check_updates:
             threading.Thread(target=self._look_for_update, daemon=True).start()
@@ -90,6 +93,15 @@ class Api:
         self._log(f"Update {self._update['version']} is available.", "good")
         return self._update["version"]
 
+    def _remember_version(self) -> bool:
+        """True the first time this version runs after an update."""
+        seen = store.load(UPDATES, {})
+        before = seen.get("ran")
+        if before == VERSION:
+            return False
+        store.save(UPDATES, {**seen, "ran": VERSION})
+        return before is not None or seen.get("tried") == VERSION
+
     def _look_for_update(self) -> None:
         """Runs once at the start. Only this finding is installed on its own, and each version only
         once: an update that does not take must not restart the program again and again."""
@@ -110,7 +122,7 @@ class Api:
     @api_call
     def boot(self):
         return {"version": VERSION, "settings": settings.load(), "choices": settings.choices(),
-                "unavailable": settings.UNAVAILABLE, "event_troops": len(templates.index())}
+                "unavailable": settings.UNAVAILABLE, "event_troops": len(templates.index()), "updated": self._updated}
 
     @api_call
     def save_setting(self, key, value):
@@ -281,7 +293,7 @@ class Api:
             self._shutdown()
             self._log(f"Installing update {update['version']}…")
             result = updater.install(
-                update, downloaded=lambda: store.save(UPDATES, {"tried": update["version"]}) if auto else None)
+                update, downloaded=lambda: auto and store.save(UPDATES, {**store.load(UPDATES, {}), "tried": update["version"]}))
         except Exception as exc:
             self._installing = False
             self._log(f"The update was not installed: {exc}", "warn")
