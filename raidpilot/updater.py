@@ -1,4 +1,4 @@
-"""Updates ueber GitHub-Releases. Laedt nur von GitHub und prueft die Pruefsumme, wenn vorhanden."""
+"""Updates through GitHub releases. Downloads only from GitHub and verifies the checksum if there is one."""
 import hashlib
 import io
 import json
@@ -37,17 +37,17 @@ def is_newer(remote: str, local: str = VERSION) -> bool:
 
 
 def check(opener=urllib.request.urlopen):
-    """Neuere Version als dict oder None."""
+    """A newer version as dict, or None."""
     request = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "RaidPilot"})
     try:
         with opener(request, timeout=10) as response:
             release = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        if exc.code == 404:  # noch keine Veroeffentlichung
+        if exc.code == 404:  # nothing released yet
             return None
-        raise UpdateError(f"GitHub antwortet mit Fehler {exc.code}.") from exc
+        raise UpdateError(f"GitHub answered with error {exc.code}.") from exc
     except (OSError, ValueError) as exc:
-        raise UpdateError("Keine Verbindung zu GitHub.") from exc
+        raise UpdateError("No connection to GitHub.") from exc
     tag = str(release.get("tag_name", ""))
     if not tag or not is_newer(tag):
         return None
@@ -63,53 +63,53 @@ def pick_asset(info: dict, frozen: bool):
     for asset in info["assets"]:
         if (frozen and asset["name"].endswith(SETUP_SUFFIX)) or (not frozen and asset["name"] == SOURCE_ASSET):
             return asset
-    raise UpdateError("Die neue Version enthält keine passende Datei.")
+    raise UpdateError("The new version has no matching file.")
 
 
 def download(asset: dict, opener=urllib.request.urlopen) -> bytes:
     url = urllib.parse.urlparse(asset["url"])
     if url.scheme != "https" or url.hostname != "github.com" or not url.path.startswith(f"/{REPO}/releases/download/"):
-        raise UpdateError("Unerwartete Download-Adresse, Update abgebrochen.")
+        raise UpdateError("Unexpected download address, update cancelled.")
     request = urllib.request.Request(asset["url"], headers={"User-Agent": "RaidPilot"})
     try:
         with opener(request, timeout=60) as response:
             data = response.read(MAX_DOWNLOAD)
     except OSError as exc:
-        raise UpdateError("Download fehlgeschlagen.") from exc
+        raise UpdateError("Download failed.") from exc
     digest = asset.get("digest", "")
     if digest.startswith("sha256:") and hashlib.sha256(data).hexdigest() != digest[7:]:
-        raise UpdateError("Prüfsumme stimmt nicht, Update abgebrochen.")
+        raise UpdateError("Checksum mismatch, update cancelled.")
     return data
 
 
 def extract_source(data: bytes, target: Path) -> int:
-    """Programmdateien aus dem Zip uebernehmen. Alles andere wird ignoriert."""
+    """Takes the program files out of the zip. Everything else is ignored."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
-        raise UpdateError("Das Update-Paket ist beschädigt.") from exc
+        raise UpdateError("The update package is damaged.") from exc
     files = {}
     for member in archive.infolist():
         if member.is_dir():
             continue
         path = PurePosixPath(member.filename)
         if path.is_absolute() or ".." in path.parts or "\\" in member.filename or ":" in member.filename:
-            raise UpdateError("Das Update-Paket enthält ungültige Pfade.")
+            raise UpdateError("The update package contains invalid paths.")
         if (len(path.parts) == 1 and path.name in ROOT_FILES) or (len(path.parts) > 1 and path.parts[0] == "raidpilot"):
             files[path] = archive.read(member)
     if PurePosixPath("raidpilot/version.py") not in files:
-        raise UpdateError("Das Update-Paket ist unvollständig.")
+        raise UpdateError("The update package is incomplete.")
     for path, content in files.items():
         destination = target.joinpath(*path.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(destination.name + ".neu")
+        temporary = destination.with_name(destination.name + ".new")
         temporary.write_bytes(content)
         temporary.replace(destination)
     return len(files)
 
 
 def install(info: dict) -> str:
-    """Gibt 'exit' (Installer laeuft) oder 'restart' (Dateien ersetzt) zurueck."""
+    """Returns 'exit' (installer is running) or 'restart' (files replaced)."""
     frozen = bool(getattr(sys, "frozen", False))
     data = download(pick_asset(info, frozen))
     if frozen:

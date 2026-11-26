@@ -1,4 +1,4 @@
-"""Texterkennung (offline, RapidOCR). Wird erst beim ersten Gebrauch geladen."""
+"""Text recognition (offline, RapidOCR). Loaded on first use."""
 import threading
 from dataclasses import dataclass
 
@@ -27,7 +27,7 @@ class Ocr:
         if self._engine is None:
             from rapidocr import RapidOCR
 
-            # Wenige Threads, damit der Emulator auf schwachen PCs fluessig bleibt
+            # Few threads so the emulator stays smooth on slower PCs
             self._engine = RapidOCR(params={
                 "Global.log_level": "error",
                 "Det.limit_side_len": 736,
@@ -38,11 +38,11 @@ class Ocr:
         return self._engine
 
     def read(self, image) -> list:
-        """Alle Texte im Bild mit Position (Pixel des uebergebenen Bildes)."""
+        """All texts of the picture with their position (pixels of the given picture)."""
         if image is None or image.size == 0:
             return []
         with self._lock:
-            # Alle Schalter immer angeben: RapidOCR merkt sich den letzten Wert
+            # Always pass every switch: RapidOCR remembers the last value
             result = self._load()(image, use_det=True, use_cls=False, use_rec=True)
         boxes = getattr(result, "boxes", None)
         texts = getattr(result, "txts", None)

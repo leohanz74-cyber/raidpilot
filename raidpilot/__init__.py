@@ -1,4 +1,4 @@
-"""RaidPilot - setzt Truppen automatisch ab. Liest nur den Bildschirm und tippt ueber ADB."""
+"""RaidPilot - automatic troop deployment. Only reads the screen and taps through ADB."""
 from .version import VERSION
 
 __all__ = ["VERSION"]

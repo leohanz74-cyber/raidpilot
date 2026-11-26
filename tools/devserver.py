@@ -1,4 +1,4 @@
-"""Oberflaeche im Browser testen:  python tools/devserver.py --fake   ->  http://127.0.0.1:8765/?dev"""
+"""Try the window in a browser:  python tools/devserver.py --fake   ->  http://127.0.0.1:8765/?dev"""
 import json
 import sys
 import time
@@ -38,9 +38,9 @@ def main():
         from tests.fakegame import FakeGame
 
         adb = FakeGame()
-        # Echte Wartezeiten, damit man dem Ablauf zusehen kann
+        # Real waiting times so the run can be watched
         adb.sleep = lambda seconds: time.sleep(seconds)
-    Handler.api = Api(adb=adb, check_updates=False)
+    Handler.api = Api(adb=adb, emulator=None if adb else "auto", check_updates=False)
     server = ThreadingHTTPServer(("127.0.0.1", 8765), partial(Handler, directory=str(ROOT / "raidpilot" / "ui")))
     print("http://127.0.0.1:8765/?dev")
     server.serve_forever()

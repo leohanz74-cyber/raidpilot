@@ -1,6 +1,6 @@
-# Jeder Push auf main wird getestet. Steht in raidpilot/version.py eine neue Nummer,
-# entsteht automatisch ein Release - die App bietet es dann als Update an.
-name: Test und Release
+# Every push to main is tested. A new number in raidpilot/version.py creates a release
+# automatically, which the app then offers as an update.
+name: Test and release
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Version pruefen
+      - name: Check version
         id: version
         shell: bash
         run: |
@@ -45,12 +45,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: EXE bauen
+      - name: Build EXE
         if: steps.version.outputs.new == 'true'
         run: |
           pip install -r requirements.txt pyinstaller
           pyinstaller --noconfirm --clean --windowed --name RaidPilot --icon raidpilot/ui/icon.ico --add-data "raidpilot/ui;raidpilot/ui" --collect-all rapidocr --collect-all webview main.py
-      - name: Installer bauen
+      - name: Build installer
         if: steps.version.outputs.new == 'true'
         shell: pwsh
         run: |
@@ -59,7 +59,7 @@ jobs:
           & $iscc "/DVersion=${{ steps.version.outputs.number }}" installer\raidpilot.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/make_zip.py
-      - name: Veroeffentlichen
+      - name: Publish
         if: steps.version.outputs.new == 'true'
         shell: bash
         run: gh release create "v${{ steps.version.outputs.number }}" dist/*-Setup.exe dist/RaidPilot-source.zip --target "$GITHUB_SHA" --title "RaidPilot ${{ steps.version.outputs.number }}" --generate-notes

@@ -1,4 +1,4 @@
-; Wird von GitHub Actions gebaut: iscc /DVersion=1.0.0 installer\raidpilot.iss
+; Built by GitHub Actions: iscc /DVersion=2.0.0 installer\raidpilot.iss
 #ifndef Version
   #define Version "0.0.0"
 #endif
@@ -28,5 +28,5 @@ Name: "{autoprograms}\RaidPilot"; Filename: "{app}\RaidPilot.exe"
 Name: "{autodesktop}\RaidPilot"; Filename: "{app}\RaidPilot.exe"
 
 [Run]
-; Ohne "skipifsilent": nach einem stillen Update startet die App wieder
-Filename: "{app}\RaidPilot.exe"; Description: "RaidPilot starten"; Flags: nowait postinstall
+; Without "skipifsilent": the app starts again after a silent update
+Filename: "{app}\RaidPilot.exe"; Description: "Start RaidPilot"; Flags: nowait postinstall

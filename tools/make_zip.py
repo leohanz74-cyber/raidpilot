@@ -1,4 +1,4 @@
-"""Packt die Quellversion: dist/RaidPilot-source.zip (zum Weitergeben und fuer Updates)."""
+"""Packs the source version: dist/RaidPilot-source.zip (for sharing and for updates)."""
 import zipfile
 from pathlib import Path
 

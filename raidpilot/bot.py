@@ -1,44 +1,62 @@
-"""Der Ablauf: Dorf -> Gegner suchen -> Truppen absetzen -> zurueck. Alles ueber Bildschirm + Tippen."""
+"""The automation: emulator -> game -> own village -> search -> attack -> back home.
+Everything happens through screenshots and touch input."""
 import random
+import re
 import threading
 import time
 import traceback
 
+import numpy as np
+
 from . import army, layout, notify, screen as screen_mod
 from .adb import AdbError
+from .mumu import MumuError
 
-MAX_BATTLE = 215          # Sekunden, danach wird der Kampf beendet
-UNKNOWN_RELAUNCH = 12     # unbekannte Bilder in Folge bis zum Neustart des Spiels
+MAX_BATTLE = 215          # seconds until a battle is ended
+MIN_BATTLE = 40
+STALE_AFTER = 30          # seconds without new loot
+SPELL_DELAY = 7
+ABILITY_DELAY = 12
+MAX_SEARCHES = 60
+UNKNOWN_RELAUNCH = 16     # unknown pictures in a row until the game is restarted
+BOOT_TIMEOUT = 240
+WALLS_PER_VISIT = 5
 
 
 class Stop(Exception):
-    """Der Nutzer hat gestoppt."""
+    """The user pressed Stop."""
 
 
 class Done(Exception):
-    """Ziel erreicht, sauber beenden."""
+    """Goal reached, finish cleanly."""
 
 
 class BotError(Exception):
-    """Weitermachen waere sinnlos oder riskant."""
+    """Going on would be pointless or risky."""
 
 
 class Bot:
-    def __init__(self, adb, ocr, get_settings, stats, log, clock=time.monotonic, sleep=None, rng=None):
+    def __init__(self, adb, ocr, get_settings, stats, log, emulator=None, clock=time.monotonic, sleep=None,
+                 rng=None, on_player=None):
         self.adb = adb
         self.ocr = ocr
         self.get_settings = get_settings
         self.stats = stats
         self.log = log
+        self.emulator = emulator
         self.clock = clock
         self._sleep = sleep
         self.rng = rng or random.Random()
+        self.on_player = on_player
         self._stop = threading.Event()
         self._thread = None
-        self.status = "Bereit"
+        self.status = "Ready"
         self.last_error = ""
+        self.size = (1600, 900)
+        self.failures = 0
+        self._warned = set()
 
-    # ---------- Steuerung ----------
+    # ---------- control ----------
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -53,7 +71,7 @@ class Bot:
 
     def stop(self) -> None:
         if self.running:
-            self.status = "Stoppe…"
+            self.status = "Stopping…"
         self._stop.set()
 
     def join(self, timeout=None) -> None:
@@ -61,50 +79,49 @@ class Bot:
             self._thread.join(timeout)
 
     def run(self) -> None:
-        """Blockierende Hauptschleife (im Test direkt aufrufbar)."""
+        """Blocking main loop (the tests call it directly)."""
         self.stats.start()
         self.failures = 0
         self._warned = set()
         adb_errors = 0
-        reason = "Gestoppt"
+        reason = "Stopped"
         try:
-            self._prepare()
+            self._connect(self.get_settings())
+            self._start_game()
             while True:
                 self._check_stop()
-                settings = self.get_settings()
-                limit = settings["max_attacks"]
-                if limit and self.stats.session["attacks"] >= limit:
-                    raise Done(f"{limit} Angriffe erledigt.")
                 try:
-                    self._cycle(settings)
+                    self._cycle(self.get_settings())
                     adb_errors = 0
                 except AdbError as exc:
                     adb_errors += 1
-                    self.log(f"Verbindung: {exc}", "warn")
+                    self.log(f"Connection: {exc}", "warn")
                     if adb_errors >= 5:
-                        raise BotError("Die Verbindung zum Emulator ist weg.") from exc
-                    self._wait(4)
+                        raise BotError("The connection to the emulator is lost.") from exc
+                    self._wait(5)
+                    if adb_errors >= 2:
+                        self._connect(self.get_settings())
                 if self.failures >= 5:
-                    raise BotError("Fünfmal hintereinander kein Angriff möglich. Prüfe die Einrichtung (Erkennung testen).")
+                    raise BotError("No attack was possible five times in a row.")
         except Stop:
             pass
         except Done as exc:
             reason = str(exc)
             self.log(reason, "good")
-        except (BotError, AdbError) as exc:
+        except (BotError, AdbError, MumuError) as exc:
             reason = self.last_error = str(exc)
             self.log(reason, "error")
-        except Exception as exc:  # unerwartet: melden statt still zu sterben
-            reason = self.last_error = f"Unerwarteter Fehler: {exc}"
+        except Exception as exc:  # unexpected: report it instead of dying silently
+            reason = self.last_error = f"Unexpected error: {exc}"
             self.log(reason, "error")
             self.log(traceback.format_exc(), "error")
         finally:
             self.stats.stop()
-            self.status = "Fehler" if self.last_error else "Bereit"
-            self.log("Bot beendet.")
-            self._report(f"RaidPilot beendet: {reason}")
+            self.status = "Error" if self.last_error else "Ready"
+            self.log("Bot stopped.")
+            self._report(f"RaidPilot stopped: {reason}")
 
-    # ---------- Hilfen ----------
+    # ---------- helpers ----------
     def _check_stop(self) -> None:
         if self._stop.is_set():
             raise Stop()
@@ -119,7 +136,9 @@ class Bot:
 
     def _shot(self):
         self._check_stop()
-        return screen_mod.Screen(self.adb.screenshot(), self.ocr)
+        shot = screen_mod.Screen(self.adb.screenshot(), self.ocr)
+        self.size = (shot.width, shot.height)
+        return shot
 
     def _tap(self, point, pause: float = 0.0) -> None:
         self._check_stop()
@@ -135,12 +154,20 @@ class Bot:
         return None, None
 
     def _wait_for(self, names, timeout: float, interval: float = 0.8):
+        """Waits for one of the buttons. Handles dialogs that can appear while an attack starts."""
         end = self.clock() + timeout
         while True:
             shot = self._shot()
             name, point = self._find_any(shot, names)
-            if name or self.clock() >= end:
+            if name:
                 return shot, name, point
+            if shot.shows_gems():
+                self.adb.back()
+                raise BotError("The game asks for gems (not enough gold to search?). Nothing was bought.")
+            if shot.contains_word(("shield",), layout.REGIONS["popup"]) and shot.button("okay"):
+                self._tap(shot.button("okay"))
+            if self.clock() >= end:
+                return shot, None, None
             self._wait(interval)
 
     def _wait_gone(self, name: str, timeout: float) -> bool:
@@ -161,84 +188,146 @@ class Bot:
         if not url:
             return
         s = self.stats.snapshot()
-        notify.send(url, f"{headline}\nAngriffe: {s['attacks']} · Gold: {notify.short(s['gold'])} · "
-                         f"Elixier: {notify.short(s['elixir'])} · Mauern: {s['walls']}", self.log)
+        notify.send(url, f"{headline}\nAttacks: {s['attacks']} · Gold: {notify.short(s['gold'])} · "
+                         f"Elixir: {notify.short(s['elixir'])} · Walls: {s['walls']}", self.log)
 
-    # ---------- Ablauf ----------
-    def _prepare(self) -> None:
-        self.status = "Verbinde…"
-        if not self.adb.serial:
-            online = [d for d in self.adb.devices() if d["state"] == "device"]
-            if not online:
-                raise BotError("Kein Gerät gefunden. Starte den Emulator und drücke in den Einstellungen auf Aktualisieren.")
-            self.adb.serial = online[0]["serial"]
-        self.log(f"Gerät: {self.adb.serial}")
-        image = self.adb.screenshot()
-        height, width = image.shape[:2]
-        if width <= height:
-            self.log("Bild ist hochkant, starte das Spiel…")
-            self.adb.launch_game()
-            self._wait(8)
+    # ---------- emulator and game ----------
+    def _online(self) -> list:
+        return [d["serial"] for d in self.adb.devices() if d["state"] == "device"]
+
+    def _boot_emulator(self) -> str:
+        """Starts MuMu Player instance #0 if needed and returns its ADB address."""
+        mumu = self.emulator
+        info = mumu.info()
+        serial = mumu.serial_of(info)
+        if not serial:
+            self.status = "Starting emulator…"
+            self.log(f"Starting MuMu Player instance #{mumu.index}…")
+            mumu.launch()
+            end = self.clock() + BOOT_TIMEOUT
+            while not serial:
+                if self.clock() >= end:
+                    raise BotError("MuMu Player did not finish starting in time.")
+                self._wait(4)
+                serial = mumu.serial_of(mumu.info())
+            self.log("Emulator is running.", "good")
+            self._wait(3)
+        return serial
+
+    def _connect(self, settings) -> None:
+        self.status = "Connecting…"
+        wanted = settings["device"]
+        has_mumu = self.emulator is not None and self.emulator.available
+        if not wanted and has_mumu:
+            wanted = self._boot_emulator()
+        online = []
+        for attempt in range(10):
+            if wanted:
+                try:
+                    self.adb.connect(wanted)
+                except AdbError:
+                    pass
+            online = self._online()
+            if wanted in online or (not wanted and online):
+                break
+            # The saved MuMu address is offline: start the emulator
+            if attempt == 0 and has_mumu and wanted == "127.0.0.1:16384":
+                wanted = self._boot_emulator()
+            self._wait(3)
+        if not wanted and online:
+            wanted = online[0]
+        if wanted not in online:
+            raise BotError("The device is not online. Start the emulator or pick another device in Settings.")
+        self.adb.serial = wanted
+        self.log(f"Connected to {wanted}.", "good")
+
+    def _start_game(self) -> None:
+        self.status = "Starting game…"
+        self.log("Opening Clash of Clans…")
+        self.adb.launch_game()
+        for _ in range(30):
             image = self.adb.screenshot()
             height, width = image.shape[:2]
-            if width <= height:
-                raise BotError("Der Emulator muss im Querformat laufen (empfohlen 1280×720 oder 1600×900).")
-        if not 1.65 <= width / height <= 1.9:
-            self.log(f"Auflösung {width}×{height} ist nicht 16:9. Stelle den Emulator am besten auf 1280×720.", "warn")
-        self.status = "Lade Texterkennung…"
-        self.ocr.read(image[:120, :320])
-
-    def _cycle(self, settings) -> None:
-        shot = self._go_home()
-        self._check_storage(shot, settings)
-        if settings["donate"] and settings["mode"] == "home":
-            self._donate()
-        if settings["mode"] == "builder":
-            self._attack_builder(settings)
+            if width > height:
+                break
+            self._wait(3)
         else:
-            self._attack_home(settings)
+            raise BotError("The emulator must run in landscape (1600×900).")
+        self.size = (width, height)
+        if not 1.7 <= width / height <= 1.85:
+            self.log(f"Resolution {width}×{height} is not 16:9. Set the emulator to 1600×900.", "warn")
+        self.status = "Loading text recognition…"
+        self.ocr.read(np.zeros((120, 320, 3), np.uint8))
+
+    def _zoom_out(self) -> None:
+        if not self.adb.zoom_out(self.size):
+            self._warn_once("zoom", "This emulator does not accept the zoom gesture. Zoom out once by hand.")
+        self._wait(0.8)
+
+    # ---------- main cycle ----------
+    def _cycle(self, settings) -> None:
+        self._go_home()
+        self._zoom_out()
+        shot = self._go_home()
+        if self.on_player:
+            name = shot.player_name()
+            if name:
+                self.on_player(name)
+                self.on_player = None
+        self._check_storage(shot, settings)
+        if settings["donate"]:
+            self._donate()
+        self._attack(settings)
 
     def _go_home(self):
-        self.status = "Gehe ins Dorf…"
-        unknown = 0
-        relaunches = 0
-        for _ in range(80):
+        self.status = "Going to the village…"
+        unknown = loading = relaunches = 0
+        for _ in range(160):
             shot = self._shot()
-            if shot.button("attack_home") and not shot.button("reload"):
+            if shot.home():
                 return shot
             if self._handle_screen(shot):
                 unknown = 0
                 self._wait(2)
                 continue
+            if shot.contains_word(("loading",)) and loading < 60:
+                loading += 1
+                self.status = "Game is loading…"
+                self._wait(3)
+                continue
             unknown += 1
             if unknown == 3:
                 self.adb.launch_game()
                 self._wait(5)
-            elif unknown in (6, 9):
-                self.adb.back()
+            elif unknown in (7, 10, 13):
+                self.adb.back()          # closes open windows
+            elif unknown == 15:
+                self._tap(shot.px(layout.POINTS["close_window"]))
             elif unknown >= UNKNOWN_RELAUNCH:
                 relaunches += 1
                 if relaunches > 2:
                     break
-                self.log("Dorf nicht erkannt, starte das Spiel neu.", "warn")
+                self.log("Village not recognised, restarting the game.", "warn")
                 self.adb.stop_game()
                 self._wait(2)
                 self.adb.launch_game()
                 self._wait(20)
-                unknown = 0
+                unknown = loading = 0
             self._wait(2.5)
-        raise BotError("Das Dorf wird nicht erkannt. Prüfe unter Einrichtung die Erkennung.")
+        raise BotError("The village screen is not recognised. Set the game language to English.")
 
     def _handle_screen(self, shot) -> bool:
-        """Bekannte Zwischenbildschirme wegklicken. True, wenn etwas getan wurde."""
+        """Gets rid of known screens on the way home. True if something was done."""
         popup = layout.REGIONS["popup"]
         if shot.contains_word(layout.OTHER_DEVICE_WORDS, popup):
-            raise BotError("Du spielst gerade auf einem anderen Gerät. Der Bot hält an.")
+            raise BotError("The account is open on another device. The bot stopped so it does not kick you out.")
         if shot.contains_word(layout.BREAK_WORDS, popup):
-            self.log("Das Spiel verlangt eine Pause. Warte 6 Minuten.", "warn")
-            self.status = "Spielpause…"
+            self.log("The game asks for a break. Waiting 6 minutes.", "warn")
+            self.status = "Game break…"
             self._wait(360)
-        cancel = shot.find_text(("Cancel", "Abbrechen"), popup)
+            self.adb.launch_game()
+            return True
+        cancel = shot.button("cancel")
         if cancel:
             self._tap(cancel)
             return True
@@ -249,7 +338,10 @@ class Bot:
         if name:
             self._tap(point)
             return True
-        # Noch im Spaehbildschirm oder Kampf: sauber verlassen
+        if shot.button("find_match") or shot.button("army_attack"):
+            self.adb.back()
+            return True
+        # Still scouting or fighting: leave properly
         point = shot.button("end_battle")
         if point:
             self._end_battle(point)
@@ -257,7 +349,7 @@ class Bot:
         return False
 
     def _end_battle(self, point) -> None:
-        self._tap(point, 1.2)
+        self._tap(point, 1.5)
         shot = self._shot()
         okay = shot.button("okay")
         if okay and not shot.shows_gems():
@@ -267,52 +359,43 @@ class Bot:
         values = shot.storage()
         if values is None:
             if settings["stop_full"] or settings["walls"]:
-                self._warn_once("storage", "Lagerstand oben rechts nicht lesbar.")
+                self._warn_once("storage", "The storage amounts at the top right cannot be read.")
             return
         capacity = settings["max_storage"]
-        if settings["walls"] and settings["mode"] == "home" and max(values) >= capacity * 0.9:
+        if settings["walls"] and max(values) >= capacity * 0.9:
             self._upgrade_walls(settings)
             values = self._go_home().storage() or values
         if settings["stop_full"] and min(values) >= capacity * 0.98:
-            raise Done("Lager sind voll.")
+            raise Done("Storages are full.")
 
-    # ---------- Heimatdorf ----------
-    def _attack_home(self, settings) -> None:
-        self.status = "Öffne Angriff…"
-        shot = self._shot()
-        point = shot.button("attack_home")
+    # ---------- attacking ----------
+    def _attack(self, settings) -> None:
+        self.status = "Opening attack menu…"
+        point = self._shot().home()
         if not point:
             return
-        self._tap(point, 1.2)
+        self._tap(point, 1.5)
         shot, name, point = self._wait_for(("find_match", "next", "army_attack"), 12)
         if name == "find_match":
             self._tap(point, 1.5)
-            shot, name, point = self._wait_for(("next", "army_attack"), 20)
+            shot, name, point = self._wait_for(("next", "army_attack"), 30)
         if name == "army_attack":
             self._tap(point, 2)
             shot, name, point = self._wait_for(("next",), 60)
         if name != "next":
             self.failures += 1
-            self.log("Suchbildschirm nicht erreicht, neuer Versuch.", "warn")
+            self.log("No opponent screen reached, trying again.", "warn")
             return
         found = self._search(shot, settings)
-        if found is None:
-            return
-        shot, loot = found
-        self._fight(shot, loot, settings)
-
-    def _enough(self, loot, settings) -> bool:
-        gold, elixir, _ = loot
-        if settings["loot_rule"] == "each":
-            return gold >= settings["min_loot"] and elixir >= settings["min_loot"]
-        return gold + elixir >= settings["min_loot"]
+        if found is not None:
+            self._fight(found, settings)
 
     def _search(self, shot, settings):
-        searches = 0
-        unreadable = 0
+        """Returns the loot of an opponent worth attacking, or None."""
+        searches = unreadable = 0
         while True:
-            self.status = "Suche Beute…"
-            self._wait(1.0)
+            self.status = f"Searching opponent {searches + 1}…"
+            self._wait(0.8)
             shot = self._shot()
             loot = shot.loot()
             if loot is None:
@@ -321,25 +404,25 @@ class Bot:
                 loot = shot.loot()
             if loot is None:
                 unreadable += 1
-                self.log("Beute nicht lesbar.", "warn")
+                self.log("The loot cannot be read.", "warn")
                 if unreadable >= 3:
                     leave = shot.button("end_battle")
                     if leave:
                         self._end_battle(leave)
-                    raise BotError("Die Beute lässt sich nicht lesen. Prüfe die Auflösung (1280×720) und teste die Erkennung.")
+                    raise BotError("The loot cannot be read. Check that the resolution is 1600×900.")
             else:
                 unreadable = 0
-                good = self._enough(loot, settings)
-                self.log(f"Gegner: {notify.short(loot[0])} Gold, {notify.short(loot[1])} Elixier"
-                         + (" → Angriff" if good else " → weiter"), "good" if good else "info")
+                good = loot[0] + loot[1] >= settings["min_loot"]
+                self.log(f"Opponent: {notify.short(loot[0])} gold, {notify.short(loot[1])} elixir"
+                         + (" → attacking" if good else " → next"), "good" if good else "info")
                 if good:
-                    return shot, loot
+                    return loot
             searches += 1
             self.stats.add(searches=1)
             point = shot.button("next")
-            if searches >= settings["max_searches"] or not point:
-                if searches >= settings["max_searches"]:
-                    self.log(f"{searches} Dörfer ohne Treffer. Senke die Mindestbeute, wenn das öfter passiert.", "warn")
+            if searches >= MAX_SEARCHES or not point:
+                if searches >= MAX_SEARCHES:
+                    self.log(f"No match after {searches} villages. Lower the minimum loot if this repeats.", "warn")
                     self.failures += 1
                 leave = shot.button("end_battle")
                 if leave:
@@ -350,101 +433,101 @@ class Bot:
             shot, name, _ = self._wait_for(("next",), 45)
             if name != "next":
                 self.failures += 1
-                self.log("Kein neuer Gegner gefunden.", "warn")
+                self.log("No new opponent was found.", "warn")
                 return None
 
-    def _detect_slots(self, shot, settings):
-        for attempt in range(3):
-            slots = army.detect_slots(shot)
-            if slots:
-                return shot, army.assign_roles(shot, slots, settings)
-            self._wait(1.5)
+    def _detect_slots(self):
+        shot = self._shot()
+        slots = army.detect_slots(shot)
+        if not any(s.count for s in slots):  # the bar may still be sliding in
+            self._wait(1.0)
             shot = self._shot()
-        return shot, []
+            slots = army.detect_slots(shot)
+        return shot, army.assign_roles(shot, slots)
 
-    def _fight(self, shot, loot, settings) -> None:
-        self.status = "Setze Truppen ab…"
-        shot, slots = self._detect_slots(shot, settings)
-        usable = [s for s in slots if s.role == "troop" or (s.role == "event" and settings["event_troops"])]
-        if not usable:
+    def _fight(self, loot, settings) -> None:
+        self.status = "Zooming out…"
+        self._zoom_out()
+        self.status = "Deploying troops…"
+        shot, slots = self._detect_slots()
+        wanted = ("troop", "event") if settings["event_troops"] else ("troop",)
+        troops = [s for s in slots if s.role in wanted and s.count]
+        if not troops:
             self.failures += 1
-            self.log("Keine Truppen in der Leiste erkannt. Kampf wird verlassen.", "warn")
+            self.log("No troops found in the troop bar. Leaving the battle.", "warn")
             leave = shot.button("end_battle")
             if leave:
                 self._end_battle(leave)
             return
+        if not settings["event_troops"] and any(s.role == "event" for s in slots):
+            self.log("Event troops are left out (switched off).")
         sides = army.choose_sides(settings["style"], settings["army"], self.rng)
-        side_map = layout.sides()
-        self.log("Seite: " + ", ".join({"tl": "oben links", "tr": "oben rechts", "bl": "unten links",
-                                        "br": "unten rechts"}[s] for s in sides))
-        for slot in usable:
-            self._deploy_troop(shot, slot, sides, side_map)
+        span = army.line_span(settings["army"])
+        names = {"tl": "Top Left", "tr": "Top Right", "bl": "Bottom Left", "br": "Bottom Right"}
+        self.log("Deploying from: " + ", ".join(names[s] for s in sides))
+        for slot in troops:
+            self._deploy(shot, slot, sides, span)
 
-        middle = [shot.px(p) for p in army.line_points(side_map, sides[:1], 3)][1]
+        middle = shot.px(army.line_points(sides[:1], 3)[1])
         if settings["siege"]:
             for slot in (s for s in slots if s.role == "siege"):
-                self._tap((slot.x, slot.y), 0.25)
-                self._tap(middle, 0.25)
+                self._tap((slot.x, slot.y), 0.3)
+                self._tap(middle, 0.3)
         heroes = [s for s in slots if s.role == "hero"] if settings["heroes"] else []
         for slot in heroes:
-            self._tap((slot.x, slot.y), 0.25)
-            self._tap(middle, 0.25)
+            self._tap((slot.x, slot.y), 0.3)
+            self._tap(middle, 0.3)
         started = self.clock()
 
-        spells = [s for s in slots if s.role == "spell"] if settings["spell"] != "none" else []
+        spells = army.choose_spells(shot.image, slots, settings["spell"])
         if spells:
-            self.status = "Warte auf Zauber…"
-            self._wait(settings["spell_delay"])
-            for number, slot in enumerate(spells):
-                self._tap((slot.x, slot.y), 0.25)
-                amount = min(slot.count or 1, 11)
-                # Weitere Zaubersorten etwas tiefer in der Basis setzen
-                for rel in army.spell_points(side_map, sides, amount, 0.5 + 0.15 * number):
+            self.status = "Casting spells…"
+            self._wait(SPELL_DELAY)
+            for slot in spells:
+                self._tap((slot.x, slot.y), 0.3)
+                for rel in army.spell_points(sides, min(slot.count, 11)):
                     self._tap(shot.px(rel), 0.35)
-        self._watch_battle(loot, heroes, started, settings)
+        elif settings["spell"] != "none":
+            self._warn_once("spells", "No spells found in the army.")
+        self._watch_battle(loot, heroes, started)
 
-    def _count_at(self, shot, slot):
-        step = shot.height * army.DEFAULT_STEP
-        for x, _, count in army.read_counts(shot):
-            if abs(x - slot.x) < step * 0.45:
-                return count
-        return None
-
-    def _deploy_troop(self, shot, slot, sides, side_map) -> None:
-        self._tap((slot.x, slot.y), 0.3)
-        remaining = slot.count or 1
+    def _deploy(self, shot, slot, sides, span) -> None:
+        remaining = slot.count
         outward = 0.0
         stuck = 0
         for _ in range(10):
-            batch = min(remaining, 40)
-            for rel in army.line_points(side_map, sides, batch, outward):
-                self._tap(shot.px(rel), 0.06)
-            if slot.count is None:
-                return
-            self._wait(0.6)
-            left = self._count_at(self._shot(), slot)
-            if not left:  # Zaehler weg oder x0: alle abgesetzt
+            self._tap((slot.x, slot.y), 0.3)
+            points = [shot.px(p) for p in army.line_points(sides, min(remaining, 40), outward, span)]
+            for first in range(0, len(points), 8):
+                self._check_stop()
+                self.adb.tap_many(points[first:first + 8])
+            self._wait(0.7)
+            left = army.card_count(self._shot(), slot.left, slot.right)
+            if left is None:  # look once more before believing it
+                self._wait(0.6)
+                left = army.card_count(self._shot(), slot.left, slot.right)
+            if not left:  # counter gone or x0: everything is deployed
                 return
             if left >= remaining:
-                # Nichts angekommen: vermutlich innerhalb der roten Linie, weiter nach aussen
+                # Nothing arrived: probably inside the red line, move further out
                 stuck += 1
-                outward += 0.045
-                if stuck >= 3:
+                outward += 0.025
+                if stuck >= 4:
                     break
             remaining = left
-        self.log(f"{remaining} Truppen ließen sich nicht absetzen.", "warn")
+        self.log(f"{remaining} troops could not be deployed.", "warn")
 
-    def _watch_battle(self, loot, heroes, started, settings) -> None:
-        self.status = "Kampf läuft…"
+    def _watch_battle(self, loot, heroes, started) -> None:
+        self.status = "Battle in progress…"
         last_loot = loot
         changed = self.clock()
-        ability_used = not heroes or not settings["hero_ability_after"]
+        ability_used = not heroes
         lost = 0
         while True:
-            self._wait(2)
-            if not ability_used and self.clock() - started >= settings["hero_ability_after"]:
+            self._wait(2.5)
+            if not ability_used and self.clock() - started >= ABILITY_DELAY:
                 for slot in heroes:
-                    self._tap((slot.x, slot.y), 0.2)
+                    self._tap((slot.x, slot.y), 0.25)
                 ability_used = True
             shot = self._shot()
             if shot.button("return_home"):
@@ -454,7 +537,7 @@ class Bot:
                 lost += 1
                 if lost >= 8:
                     self.failures += 1
-                    self.log("Kampfbildschirm verloren.", "warn")
+                    self.log("The battle screen disappeared.", "warn")
                     return
                 continue
             lost = 0
@@ -462,12 +545,11 @@ class Bot:
             if now_loot and now_loot != last_loot:
                 last_loot = now_loot
                 changed = self.clock()
-            stale = settings["end_stale"] and self.clock() - changed >= settings["end_stale"] \
-                and self.clock() - started >= 35
+            stale = self.clock() - changed >= STALE_AFTER and self.clock() - started >= MIN_BATTLE
             if stale or self.clock() - started >= MAX_BATTLE:
-                self.log("Keine neue Beute mehr, beende den Kampf." if stale else "Zeit um, beende den Kampf.")
+                self.log("No more loot coming in, ending the battle." if stale else "Time is up, ending the battle.")
                 self._end_battle(leave)
-                shot, name, _ = self._wait_for(("return_home",), 20)
+                shot, name, _ = self._wait_for(("return_home",), 25)
                 if not name:
                     self.failures += 1
                     return
@@ -475,144 +557,118 @@ class Bot:
         self._finish(loot, last_loot)
 
     def _finish(self, first, last) -> None:
-        self.status = "Kampf beendet…"
-        self._wait(2.5)  # Ergebnis zaehlt noch hoch
+        self.status = "Reading result…"
+        self._wait(4)  # the numbers count up
         shot = self._shot()
-        values = [v for v, _ in shot.numbers(layout.REGIONS["result_loot"]) if v < 10_000_000]
-        if len(values) >= 2:
-            gold, elixir = values[0], values[1]
-            dark = values[2] if len(values) > 2 and values[2] < 100_000 else 0
-        else:  # Ersatz: was vom Gegner verschwunden ist
-            gold, elixir, dark = (max(0, a - b) for a, b in zip(first, last))
+        result = shot.result_loot()
+        for _ in range(3):
+            self._wait(1.2)
+            shot = self._shot()
+            again = shot.result_loot()
+            if again == result:
+                break
+            result = again
+        if result is None or max(result) > 40_000_000:
+            # Fallback: what disappeared from the opponent
+            result = tuple(max(0, a - b) for a, b in zip(first, last))
+        gold, elixir, dark = result
         self.stats.add(gold=gold, elixir=elixir, dark=dark, attacks=1)
         self.failures = 0
-        self.log(f"Beute: {notify.short(gold)} Gold, {notify.short(elixir)} Elixier", "good")
+        self.log(f"Attack finished: +{notify.short(gold)} gold, +{notify.short(elixir)} elixir", "good")
         if self.stats.session["attacks"] % 10 == 0:
-            self._report("RaidPilot Zwischenstand")
+            self._report("RaidPilot status")
         point = shot.button("return_home")
         if point:
             self._tap(point, 3)
 
-    # ---------- Bauarbeiterbasis (Beta) ----------
-    def _attack_builder(self, settings) -> None:
-        self.status = "Öffne Angriff…"
-        point = self._shot().button("attack_home")
-        if not point:
-            return
-        self._tap(point, 1.2)
-        shot, name, point = self._wait_for(("find_match", "army_attack"), 12)
-        if name:
-            self._tap(point, 2)
-        shot, name, _ = self._wait_for(("end_battle",), 60)
-        if not name:
-            self.failures += 1
-            self.log("Kein Kampf gestartet.", "warn")
-            return
-        started = self.clock()
-        sides = army.choose_sides(settings["style"], "all", self.rng)
-        side_map = layout.sides()
-        deployed_at = None
-        while self.clock() - started < 420:
+    # ---------- walls ----------
+    def _find_wall_entry(self):
+        for _ in range(6):
             shot = self._shot()
-            if shot.button("return_home"):
-                self._wait(2)
-                self.stats.add(attacks=1)
-                self.failures = 0
-                self.log("Kampf auf der Bauarbeiterbasis beendet.", "good")
-                done = self._shot().button("return_home")
-                if done:
-                    self._tap(done, 3)
-                return
-            if deployed_at is None or self.clock() - deployed_at >= 20:
-                # Erneut absetzen deckt auch die zweite Stufe ab; Heldentippen loest Faehigkeiten aus
-                self.status = "Setze Truppen ab…"
-                slots = army.detect_slots(shot)
-                positions = [(s.x, s.y) for s in slots if s.role != "skip"] or \
-                            [shot.px((0.12 + i * 0.075, 0.91)) for i in range(8)]
-                targets = army.line_points(side_map, sides, len(positions))
-                for position, target in zip(positions, targets):
-                    self._tap(position, 0.2)
-                    self._tap(shot.px(target), 0.2)
-                deployed_at = self.clock()
-            self.status = "Kampf läuft…"
-            self._wait(3)
-        self.failures += 1
+            for word in screen_mod.join_lines(shot.words(layout.REGIONS["builder_list"])):
+                if any(w in screen_mod.normalize(word.text) for w in layout.WALL_WORDS):
+                    return shot, word
+            self.adb.swipe(*shot.px((0.55, 0.65)), *shot.px((0.55, 0.30)), 500)
+            self._wait(1.0)
+        return shot, None
 
-    # ---------- Mauern (Beta) ----------
-    def _upgrade_walls(self, settings, limit: int = 5) -> None:
-        for _ in range(limit):
+    def _upgrade_walls(self, settings) -> None:
+        for _ in range(WALLS_PER_VISIT):
             shot = self._go_home()
             before = shot.storage()
             if not before or max(before) < settings["max_storage"] * 0.75:
                 return
-            self.status = "Verbessere Mauern…"
-            self._tap(shot.px(layout.POINTS["builder_menu"]), 1.2)
-            entry = None
-            for _scroll in range(6):
-                shot = self._shot()
-                for word in screen_mod.join_lines(shot.words(layout.REGIONS["builder_list"])):
-                    if any(w in screen_mod.normalize(word.text) for w in layout.WALL_WORDS):
-                        entry = word
-                        break
-                if entry:
-                    break
-                self.adb.swipe(*shot.px((0.5, 0.62)), *shot.px((0.5, 0.30)), 500)
-                self._wait(1.0)
+            if shot.free_builders() == 0:
+                self._warn_once("builder", "No free builder, walls are skipped for now.")
+                return
+            self.status = "Upgrading walls…"
+            self._tap(shot.px(layout.POINTS["builder_menu"]), 1.5)
+            shot, entry = self._find_wall_entry()
             if not entry:
-                self.log("Keine Mauer in der Bauliste gefunden.", "warn")
-                self._tap(shot.px(layout.POINTS["builder_menu"]), 0.8)
-                return
-            self._tap(tuple(int(v) for v in entry.center), 1.5)
-            shot = self._shot()
-            button = shot.button("upgrade")
-            if not button:
-                self.log("Knopf zum Verbessern nicht gefunden.", "warn")
                 self.adb.back()
+                self._warn_once("walls", "No wall was found in the builder list.")
                 return
-            self._tap(button, 1.3)
+            self._tap(tuple(int(v) for v in entry.center), 1.8)
             shot = self._shot()
-            if shot.shows_gems():
+            region = layout.BUTTONS["upgrade"][0]
+            buttons = sorted((w for w in shot.words(region) if screen_mod.normalize(w.text) == "upgrade"),
+                             key=lambda w: w.x)
+            if not buttons:
                 self.adb.back()
-                self.log("Nicht genug Ressourcen für die nächste Mauer (Juwelen werden nie ausgegeben).")
+                self._warn_once("walls", "No upgrade button was found for the wall.")
                 return
-            confirm = shot.button("confirm")
+            # With two buttons the left one costs gold, the right one elixir
+            choice = buttons[-1] if len(buttons) > 1 and before[1] > before[0] else buttons[0]
+            self._tap(tuple(int(v) for v in choice.center), 1.5)
+            shot = self._shot()
+            confirm = None if shot.shows_gems() else shot.button("confirm")
             if not confirm:
                 self.adb.back()
+                self._warn_once("walls", "The wall upgrade was not confirmed (nothing was bought).")
                 return
-            self._tap(confirm, 2)
-            shot = self._shot()
-            if shot.shows_gems():
+            self._tap(confirm, 1.8)
+            if self._shot().shows_gems():
                 self.adb.back()
                 return
             after = self._go_home().storage()
-            if not after or sum(after) >= sum(before):
-                self.log("Mauer-Upgrade nicht bestätigt.", "warn")
-                return
-            self.stats.add(walls=1)
-            self.log("Mauer verbessert.", "good")
-
-    # ---------- Spenden (Beta) ----------
-    def _donate(self) -> None:
-        self.status = "Spende Truppen…"
-        shot = self._shot()
-        self._tap(shot.px(layout.POINTS["chat_open"]), 1.2)
-        shot = self._shot()
-        button = shot.button("donate")
-        if button:
-            self._tap(button, 1.2)
-            shot = self._shot()
-            if shot.contains_word(layout.PURCHASE_WORDS, layout.REGIONS["donate_popup"]):
-                self.log("Spendenfenster erwähnt Juwelen, überspringe.", "warn")
+            if after and (after[0] < before[0] or after[1] < before[1]):
+                self.stats.add(walls=1)
+                self.log("Wall upgraded.", "good")
             else:
-                region = layout.REGIONS["donate_popup"]
-                cards = [w for w in shot.words(region) if army.COUNT_RE.match(w.text.strip())][:3]
-                for word in cards:
-                    x, y = word.center
-                    self._tap((int(x), int(y + shot.height * 0.05)), 0.4)
-                if cards:
-                    self.log("Truppen gespendet.")
-            self.adb.back()
-            self._wait(0.8)
+                self._warn_once("walls", "The wall upgrade did not go through.")
+                return
+
+    # ---------- donations ----------
+    def _donate(self) -> None:
+        self.status = "Donating troops…"
         shot = self._shot()
-        if not shot.button("attack_home") or shot.button("donate"):
-            self._tap(shot.px(layout.POINTS["chat_close"]), 0.8)
+        self._tap(shot.px(layout.POINTS["chat_open"]), 1.8)
+        donated = 0
+        for _ in range(3):
+            shot = self._shot()
+            point = shot.button("donate")
+            if not point:
+                break
+            self._tap(point, 1.2)
+            shot = self._shot()
+            if shot.shows_gems():
+                self.adb.back()
+                break
+            # Only cards with an own troop counter are tapped, never gem offers
+            cards = [w for w in shot.words(layout.REGIONS["donate_popup"])
+                     if re.fullmatch(r"[x×X]\s?\d{1,3}", w.text.strip())]
+            if not cards:
+                self.adb.back()
+                break
+            card = cards[0]
+            target = (int(card.center[0]), int(card.center[1] + 0.05 * shot.height))
+            for _tap in range(5):
+                self._tap(target, 0.35)
+            donated += 1
+            self.adb.back()
+            self._wait(1.0)
+        shot = self._shot()
+        if not shot.home():
+            self._tap(shot.px(layout.POINTS["chat_close"]), 1.0)
+        if donated:
+            self.log(f"Answered {donated} donation request(s).", "good")

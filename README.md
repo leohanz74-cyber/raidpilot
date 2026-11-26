@@ -1,63 +1,63 @@
 # RaidPilot
 
-Windows-App, die in Clash of Clans über einen Android-Emulator Gegner sucht und Truppen absetzt.
-Sie **liest nur Bildschirmfotos und sendet Tipp-Befehle über ADB**. Sie verändert das Spiel nicht
-und liest keinen Spielspeicher.
+Windows app that farms the Home Village in Clash of Clans through the MuMu Player emulator: it starts
+the emulator, opens the game, zooms out, searches for loot, deploys your army, returns home and repeats.
+It **only reads screenshots and sends touch input through ADB**. It does not modify the game, does not
+read game memory and never moves your mouse. The emulator window may be hidden behind other windows.
 
-> **Wichtig:** Supercell verbietet Bots in seinen Nutzungsbedingungen, auch solche, die nur tippen.
-> Der Account kann gesperrt werden. Nutze keinen Account, den du nicht verlieren willst.
-> RaidPilot enthält bewusst nichts, um die Erkennung zu umgehen.
+> **Important:** Supercell's Terms of Service forbid bots, including ones that only tap. Your account can
+> be banned. Do not use an account you are not prepared to lose. RaidPilot deliberately contains nothing
+> to evade detection.
 
-## Start
+## Setup (once)
 
-1. [Python 3.12](https://www.python.org/downloads/) muss installiert sein.
-2. `START.bat` doppelklicken. Beim ersten Mal werden die Pakete geladen.
-3. Profil anlegen (bleibt nur auf deinem PC).
+1. Install [Python 3.12](https://www.python.org/downloads/).
+2. MuMu Player: instance **#0**, resolution **1600×900**, **240 DPI**, with Clash of Clans installed.
+3. Clash of Clans language: **English**.
+4. In the game, set up the army you want to attack with (it is used as it is).
 
-Gibt es unter **Releases** eine `RaidPilot-…-Setup.exe`, reicht stattdessen der Installer.
+## Run
 
-## Emulator vorbereiten (z. B. MuMuPlayer oder LDPlayer)
+1. Double-click `START.bat` (the first start downloads the packages).
+2. Pick army, spells and loot threshold on the **Home** tab.
+3. Press **START**. The rest happens on its own.
 
-- Auflösung **1280×720** (oder 1600×900), Querformat
-- ADB-Debugging einschalten
-- Spielsprache Deutsch oder Englisch
+If a **Release** contains `RaidPilot-…-Setup.exe`, the installer can be used instead of Python.
 
-Dann in RaidPilot: **Optionen → Aktualisieren**, Gerät wählen.
+## What the settings do
 
-## Vor dem ersten Lauf
-
-**Einrichtung → Werkzeug öffnen → Bild aufnehmen → Erkennung testen.** Mache das im Dorf, im
-Angriffsmenü, beim Gegner (mit „Weiter“) und auf dem Ergebnisbildschirm.
-
-- Knopf nicht erkannt? Unter **Knopf** einmal einrahmen.
-- Truppen landen nicht? Unter **Seiten** die Absetz-Linien knapp vor die rote Linie legen.
-- Falsche Rollen in der Leiste? Unter **Plätze** festlegen.
-- Nur bestimmte Truppen oder Event-Truppen? Unter **Truppe** das Symbol erfassen.
-
-## Funktionen
-
-| Bereich | Inhalt |
+| Setting | Effect |
 |---|---|
-| Suche | Mindestbeute (zusammen oder einzeln), „Weiter“ bis es passt, Obergrenze |
-| Angriff | Seite wählbar oder zufällig, Truppen, Helden samt Fähigkeit, Belagerungsmaschine, Zauber |
-| Kampf | endet, wenn keine Beute mehr kommt |
-| Lager | anhalten, wenn voll |
-| Statistik | Sitzung und Gesamt, optional Meldung an einen eigenen Discord-Webhook |
-| Beta | Mauern verbessern, Spenden, Bauarbeiterbasis |
+| Select Mode | Home Village. Builder Base is not available yet. |
+| Select Army | Chooses the deployment pattern for your trained army (line, compact group or all around). |
+| Spells | None, Rage Spells (purple spell cards) or Totem Spells (the other spell cards). |
+| Minimum Loot Threshold | Opponent's gold + elixir needed before it attacks. Every "Next" costs gold. |
+| Max Storage Capacity | Your storage size; used for "stop when full" and wall upgrades. |
+| Deployment Style | Random side, a fixed side or all sides. |
+| Deploy Heroes Automatically | **Off by default.** Hero cards are never touched while off. |
+| Use Siege Machines | Deploys the siege machine card. |
+| Use Event Troops | Deploys cards with the event badge, plus icons saved with "Capture Event Troop". |
+| Auto Upgrade Walls (Beta) | Upgrades walls when a storage is nearly full. Never confirms gem dialogs. |
+| Stop When Storage Is Full | Stops once gold and elixir are full. |
+| Donate Troops Before Attack (Beta) | Answers donation requests in the clan chat. Never spends gems. |
 
-**Beta** heißt: noch nie am echten Spiel erprobt. Bei Juwelen- oder Kaufdialogen wird abgebrochen.
+**Beta** features have not been verified on the real game yet.
+
+## When something is not recognised
+
+The **Log** tab says which step failed. Log file and settings are in `%APPDATA%\RaidPilot`.
 
 ## Updates
 
-Eine neue Nummer in `raidpilot/version.py` auf `main` pushen. GitHub baut Installer und Quellpaket,
-die App zeigt dann oben „Version … installieren“.
+Push a new number in `raidpilot/version.py` to `main`. GitHub builds the installer and the source
+package, and the app then offers "Install version …".
 
-## Entwicklung
+## Development
 
 ```
 pip install -r requirements.txt pytest
 python -m pytest
-python tools/devserver.py --fake     # Oberfläche im Browser: http://127.0.0.1:8765/?dev
+python tools/devserver.py --fake     # window in a browser: http://127.0.0.1:8765/?dev
 ```
 
-Die Tests laufen gegen ein nachgestelltes Spiel (`tests/fakegame.py`), nicht gegen das echte.
+Tests run against a simulated game (`tests/fakegame.py`), not against the real one.

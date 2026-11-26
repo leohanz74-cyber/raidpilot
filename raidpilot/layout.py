@@ -1,90 +1,70 @@
-"""Wo auf dem Bildschirm was zu finden ist. Alle Werte relativ (0..1) bei 16:9 im Querformat."""
-from . import store
+"""Where things are on the screen. All values are relative (0..1) to a 16:9 landscape picture and were
+measured on a 1600x900 / 240 DPI MuMu Player instance with the English game."""
 
-# Name: (Bereich x0,y0,x1,y1, moegliche Beschriftungen Deutsch/Englisch)
+# name: (region x0, y0, x1, y1, accepted labels)
 BUTTONS = {
-    "attack_home": ((0.00, 0.74, 0.20, 1.00), ("Attack!", "Attack", "Angriff!", "Angriff", "Angreifen")),
-    "find_match": ((0.00, 0.35, 0.65, 0.98), ("Find a Match", "Find Match", "Gegner suchen", "Gegner finden", "Spiel suchen", "Find Now", "Jetzt suchen")),
-    "army_attack": ((0.62, 0.72, 1.00, 1.00), ("Attack!", "Attack", "Angriff!", "Angreifen", "Angriff")),
-    "next": ((0.76, 0.60, 1.00, 0.86), ("Next", "Weiter", "Nächster")),
-    "end_battle": ((0.00, 0.60, 0.24, 0.86), ("End Battle", "Surrender", "Kampf beenden", "Aufgeben", "Beenden")),
-    "return_home": ((0.30, 0.72, 0.70, 0.99), ("Return Home", "Zurück", "Heimkehren", "Nach Hause", "Zum Dorf")),
-    "okay": ((0.18, 0.40, 0.82, 0.92), ("Okay", "OK")),
-    "reload": ((0.18, 0.40, 0.82, 0.92), ("Reload", "Reload Game", "Try Again", "Neu laden", "Spiel neu laden", "Erneut versuchen", "Erneut verbinden")),
-    "upgrade": ((0.15, 0.66, 0.85, 1.00), ("Upgrade", "Verbessern", "Ausbauen", "Aufwerten")),
-    "confirm": ((0.25, 0.55, 0.95, 0.98), ("Confirm", "Bestätigen", "Okay", "Upgrade", "Verbessern", "Ausbauen")),
-    "donate": ((0.00, 0.08, 0.45, 0.92), ("Donate", "Spenden")),
+    "home_battle": ((0.00, 0.88, 0.14, 1.00), ("Battle", "Attack!")),
+    "home_build": ((0.86, 0.88, 1.00, 1.00), ("Build",)),
+    "find_match": ((0.00, 0.35, 0.65, 0.98), ("Find a Match", "Find Match")),
+    "army_attack": ((0.70, 0.80, 1.00, 0.98), ("Attack!", "Attack")),
+    "next": ((0.76, 0.60, 1.00, 0.86), ("Next",)),
+    "end_battle": ((0.00, 0.66, 0.20, 0.82), ("End Battle", "Surrender")),
+    "return_home": ((0.38, 0.77, 0.62, 0.95), ("Return Home", "Return")),
+    "okay": ((0.15, 0.40, 0.85, 0.95), ("Okay", "OK")),
+    "cancel": ((0.15, 0.40, 0.85, 0.95), ("Cancel",)),
+    "reload": ((0.10, 0.35, 0.90, 0.95), ("Reload Game", "Reload", "Try Again", "Retry")),
+    "upgrade": ((0.12, 0.64, 0.88, 1.00), ("Upgrade More", "Upgrade")),
+    "confirm": ((0.25, 0.55, 0.95, 0.98), ("Confirm", "Okay", "Upgrade")),
+    "donate": ((0.00, 0.08, 0.45, 0.92), ("Donate",)),
 }
-BUTTON_TITLES = {
-    "attack_home": "Angriff (im Dorf)",
-    "find_match": "Gegner suchen",
-    "army_attack": "Angriff bestätigen",
-    "next": "Weiter",
-    "end_battle": "Kampf beenden / Aufgeben",
-    "return_home": "Zurück zum Dorf",
-    "okay": "Okay",
-    "reload": "Neu laden",
-    "upgrade": "Verbessern",
-    "confirm": "Bestätigen",
-    "donate": "Spenden",
-}
+# These labels must match completely ("End Battle" is not "Battle")
+EXACT = ("home_battle", "home_build")
 
 REGIONS = {
-    "loot": (0.00, 0.09, 0.22, 0.31),
+    "loot": (0.00, 0.02, 0.30, 0.45),
+    "result": (0.34, 0.36, 0.64, 0.68),
+    "bonus": (0.66, 0.38, 0.86, 0.66),
     "home_storage": (0.76, 0.00, 1.00, 0.22),
-    "result_loot": (0.30, 0.30, 0.70, 0.70),
+    "player_name": (0.08, 0.05, 0.30, 0.10),
+    "builders": (0.86, 0.72, 1.00, 0.82),
     "troop_bar": (0.00, 0.81, 1.00, 1.00),
-    "popup": (0.12, 0.12, 0.88, 0.92),
-    "builder_list": (0.22, 0.08, 0.78, 0.92),
-    "donate_popup": (0.20, 0.10, 0.95, 0.92),
+    "popup": (0.10, 0.10, 0.90, 0.95),
+    "builder_list": (0.22, 0.05, 0.85, 0.95),
+    "donate_popup": (0.20, 0.05, 0.98, 0.95),
 }
 
 POINTS = {
-    "builder_menu": (0.455, 0.047),
-    "chat_open": (0.012, 0.455),
+    "builder_menu": (0.922, 0.765),
+    "chat_open": (0.036, 0.500),
     "chat_close": (0.385, 0.455),
+    "close_window": (0.966, 0.090),
 }
 
-# Absetz-Linien am Rand der Karte: (Start, Ende). In der Einrichtung anpassbar.
+# Deployment lines just outside the red boundary when the map is zoomed out completely
 SIDES = {
-    "tl": ((0.14, 0.45), (0.42, 0.11)),
-    "tr": ((0.58, 0.11), (0.86, 0.45)),
-    "bl": ((0.18, 0.56), (0.34, 0.75)),
-    "br": ((0.82, 0.56), (0.66, 0.75)),
+    "tl": ((0.135, 0.435), (0.375, 0.110)),
+    "tr": ((0.625, 0.110), (0.865, 0.435)),
+    "bl": ((0.135, 0.545), (0.300, 0.765)),
+    "br": ((0.865, 0.540), (0.690, 0.775)),
 }
-CENTER = (0.50, 0.43)
+CENTER = (0.505, 0.455)
 
-# Woerter, die auf einen Kauf hindeuten: dort wird nie bestaetigt
-PURCHASE_WORDS = ("gem", "gems", "juwel", "juwelen", "buy", "kaufen", "missing", "fehlende", "notenough", "nichtgenug")
-OTHER_DEVICE_WORDS = ("anotherdevice", "anderengerat", "anderesgerat", "anderemgerat")
-BREAK_WORDS = ("personalbreak", "takeabreak", "pausemachen", "eigenepause", "zwangspause")
-WALL_WORDS = ("wall", "mauer")
+# Areas with buttons or panels: troops are never tapped there
+BLOCKED = (
+    (0.00, 0.00, 0.17, 0.28),   # enemy name and loot
+    (0.76, 0.00, 1.00, 0.22),   # own resources
+    (0.42, 0.00, 0.58, 0.09),   # battle timer
+    (0.00, 0.69, 0.14, 0.81),   # End Battle
+    (0.81, 0.62, 1.00, 0.81),   # Next / damage
+    (0.00, 0.80, 1.00, 1.00),   # troop bar
+)
 
-FILE = "layout.json"
-
-
-def sides() -> dict:
-    result = dict(SIDES)
-    for key, line in store.load(FILE, {}).get("sides", {}).items():
-        if key in result:
-            try:
-                (x1, y1), (x2, y2) = line
-                result[key] = ((float(x1), float(y1)), (float(x2), float(y2)))
-            except (TypeError, ValueError):
-                pass
-    return result
+# Words that point to a purchase: such dialogs are never confirmed
+PURCHASE_WORDS = ("gem", "gems", "buy", "purchase", "missing", "notenough", "insufficient")
+OTHER_DEVICE_WORDS = ("anotherdevice", "otherdevice")
+BREAK_WORDS = ("personalbreak", "takeabreak", "timeforabreak")
+WALL_WORDS = ("wall",)
 
 
-def set_side(key: str, start, end) -> None:
-    if key not in SIDES:
-        raise ValueError("Unbekannte Seite")
-    clamp = lambda p: (min(0.99, max(0.01, float(p[0]))), min(0.80, max(0.02, float(p[1]))))
-    data = store.load(FILE, {})
-    data.setdefault("sides", {})[key] = [clamp(start), clamp(end)]
-    store.save(FILE, data)
-
-
-def reset_sides() -> None:
-    data = store.load(FILE, {})
-    data.pop("sides", None)
-    store.save(FILE, data)
+def blocked(x: float, y: float) -> bool:
+    return any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in BLOCKED)

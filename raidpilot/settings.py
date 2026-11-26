@@ -1,107 +1,79 @@
-"""Einstellungen mit Standardwerten und Pruefung."""
-import copy
-
+"""Settings with defaults and validation."""
 from . import store
 
-MODES = {"home": "Heimatdorf", "builder": "Bauarbeiterbasis (Beta)"}
+FILE = "settings.json"
+SCHEMA = 2
+
+MODES = {"home": "Home Village", "builder": "Builder Base (not available yet)"}
 ARMIES = {
-    "all": "Alle Truppen",
-    "dragon": "Drachen",
-    "edrag": "Elektrodrachen",
-    "barch": "Barbaren + Bogenschützen",
-    "goblin": "Kobolde",
-    "custom": "Nur erfasste Truppen",
+    "dragon": "Dragon",
+    "electric_dragon": "Electric Dragon",
+    "super_dragon": "Super Dragon",
+    "thrower": "Thrower",
+    "meteor_golem": "Meteor Golem",
+    "valkyrie": "Valkyrie",
+    "sneaky_goblin": "Sneaky Goblin",
 }
-SPELLS = {
-    "rage": "Wutzauber",
-    "lightning": "Blitzzauber",
-    "freeze": "Frostzauber",
-    "heal": "Heilzauber",
-    "haste": "Hastzauber",
-    "none": "Keine Zauber",
-}
+SPELLS = {"none": "None", "rage": "Rage Spells", "totem": "Totem Spells"}
 STYLES = {
-    "random": "Zufällige Seite",
-    "tl": "Oben links",
-    "tr": "Oben rechts",
-    "bl": "Unten links",
-    "br": "Unten rechts",
-    "top": "Beide oberen Seiten",
-    "all": "Alle vier Seiten",
+    "random": "Random Side",
+    "tl": "Top Left",
+    "tr": "Top Right",
+    "bl": "Bottom Left",
+    "br": "Bottom Right",
+    "all": "All Sides",
 }
-ROLES = ("auto", "troop", "hero", "siege", "spell", "event", "skip")
-MAX_SLOTS = 11
+UNAVAILABLE = {"mode": ("builder",)}
 
 DEFAULTS = {
     "mode": "home",
     "army": "dragon",
     "spell": "rage",
-    "min_loot": 600_000,
-    "loot_rule": "sum",          # sum = Gold+Elixier zusammen, each = beide einzeln
-    "max_storage": 20_000_000,
-    "device": "",
-    "adb_path": "",
+    "min_loot": 600_000,          # gold and elixir of the opponent together
+    "max_storage": 24_000_000,    # capacity of one storage resource
+    "device": "",                 # empty = MuMu Player instance #0, started automatically
     "style": "random",
-    "heroes": True,
-    "hero_ability_after": 12,
+    "heroes": False,
     "siege": False,
     "event_troops": False,
     "walls": False,
     "stop_full": False,
     "donate": False,
-    "end_stale": 30,             # Sekunden ohne neue Beute -> Kampf beenden (0 = nie)
-    "spell_delay": 7,
-    "spell_slots": 1,            # nur noetig, wenn keine Helden in der Leiste sind
-    "max_searches": 60,
-    "max_attacks": 0,            # 0 = unbegrenzt
-    "slot_roles": ["auto"] * MAX_SLOTS,
     "webhook": "",
 }
-
-_RANGES = {
-    "min_loot": (0, 3_000_000),
-    "max_storage": (500_000, 35_000_000),
-    "hero_ability_after": (0, 90),
-    "end_stale": (0, 120),
-    "spell_delay": (0, 60),
-    "spell_slots": (0, 6),
-    "max_searches": (5, 500),
-    "max_attacks": (0, 10_000),
-}
-_CHOICES = {"mode": MODES, "army": ARMIES, "spell": SPELLS, "style": STYLES, "loot_rule": ("sum", "each")}
+RANGES = {"min_loot": (0, 3_000_000), "max_storage": (1_000_000, 24_000_000)}
+_CHOICES = {"mode": MODES, "army": ARMIES, "spell": SPELLS, "style": STYLES}
+_WEBHOOKS = ("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")
 
 
 def validate(key: str, value):
-    """Gibt den bereinigten Wert zurueck oder wirft ValueError."""
+    """Returns the cleaned value or raises ValueError."""
     if key not in DEFAULTS:
-        raise ValueError(f"Unbekannte Einstellung: {key}")
+        raise ValueError(f"Unknown setting: {key}")
     default = DEFAULTS[key]
     if key in _CHOICES:
-        if value not in _CHOICES[key]:
-            raise ValueError(f"Ungültiger Wert für {key}: {value!r}")
+        if value not in _CHOICES[key] or value in UNAVAILABLE.get(key, ()):
+            raise ValueError(f"Invalid value for {key}: {value!r}")
         return value
-    if key == "slot_roles":
-        if not isinstance(value, list):
-            raise ValueError("slot_roles muss eine Liste sein")
-        roles = [r if r in ROLES else "auto" for r in value][:MAX_SLOTS]
-        return roles + ["auto"] * (MAX_SLOTS - len(roles))
     if key == "webhook":
         value = str(value).strip()
-        allowed = ("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")
-        if value and not value.startswith(allowed):
-            raise ValueError("Das ist keine Discord-Webhook-Adresse")
+        if value and not value.startswith(_WEBHOOKS):
+            raise ValueError("This is not a Discord webhook address.")
         return value
     if isinstance(default, bool):
         return bool(value)
     if isinstance(default, int):
-        low, high = _RANGES[key]
+        low, high = RANGES[key]
         return max(low, min(high, int(value)))
     return str(value).strip()
 
 
 def load() -> dict:
-    result = copy.deepcopy(DEFAULTS)
-    for key, value in store.load("settings.json", {}).items():
+    result = dict(DEFAULTS)
+    stored = store.load(FILE, {})
+    if stored.get("schema") != SCHEMA:  # files of version 1 used other defaults
+        return result
+    for key, value in stored.items():
         try:
             result[key] = validate(key, value)
         except (ValueError, TypeError):
@@ -112,7 +84,7 @@ def load() -> dict:
 def update(key: str, value) -> dict:
     current = load()
     current[key] = validate(key, value)
-    store.save("settings.json", current)
+    store.save(FILE, {"schema": SCHEMA, **current})
     return current
 
 

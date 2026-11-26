@@ -1,3 +1,3 @@
-# Neue Version veroeffentlichen: Nummer erhoehen und auf main pushen.
-VERSION = "1.0.0"
+VERSION = "2.0.0"
+# GitHub repository that publishes updates
 REPO = "leohanz74-cyber/raidpilot"

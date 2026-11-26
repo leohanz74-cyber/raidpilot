@@ -1,4 +1,4 @@
-"""Statistik: aktuelle Sitzung und Gesamtwerte je Profil."""
+"""Statistics: current session and lifetime totals."""
 import threading
 import time
 
@@ -9,9 +9,9 @@ FILE = "stats.json"
 
 
 class Stats:
-    def __init__(self, user: str = "default"):
+    def __init__(self, key: str = "home"):
         self._lock = threading.RLock()
-        self.user = user.casefold()
+        self.key = key
         self.session = dict.fromkeys(FIELDS, 0)
         self._started = None
         self._counted = 0.0
@@ -30,7 +30,7 @@ class Stats:
     def add(self, **values) -> None:
         with self._lock:
             data = store.load(FILE, {})
-            total = data.setdefault(self.user, {})
+            total = data.setdefault(self.key, {})
             for key, amount in values.items():
                 if key not in FIELDS or not amount:
                     continue
@@ -39,7 +39,7 @@ class Stats:
             store.save(FILE, data)
 
     def _pending(self) -> int:
-        """Laufzeit, die noch nicht gespeichert ist."""
+        """Runtime that has not been saved yet."""
         if self._started is None:
             return 0
         return max(0, int(time.monotonic() - self._started - self._counted))
@@ -52,12 +52,14 @@ class Stats:
 
     def snapshot(self) -> dict:
         with self._lock:
-            if self._pending() >= 30:  # nicht bei jeder Abfrage auf die Platte schreiben
+            if self._pending() >= 30:  # do not write to disk on every poll
                 self._save_runtime()
             result = dict(self.session)
             result["runtime"] += self._pending()
             return result
 
     def lifetime(self) -> dict:
-        total = store.load(FILE, {}).get(self.user, {})
-        return {key: total.get(key, 0) for key in FIELDS}
+        total = store.load(FILE, {}).get(self.key, {})
+        result = {key: total.get(key, 0) for key in FIELDS}
+        result["runtime"] += self._pending()
+        return result

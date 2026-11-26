@@ -1,4 +1,4 @@
-"""Log im Speicher (fuer die Oberflaeche) und als Datei."""
+"""Log in memory (for the window) and as a file."""
 import threading
 import time
 from collections import deque
@@ -25,7 +25,7 @@ class Log:
                 try:
                     path = store.data_dir() / "raidpilot.log"
                     if path.exists() and path.stat().st_size > MAX_FILE:
-                        path.replace(path.with_suffix(".alt.log"))
+                        path.replace(path.with_suffix(".old.log"))
                     with open(path, "a", encoding="utf-8") as fh:
                         fh.write(f"{time.strftime('%Y-%m-%d')} {stamp} [{level}] {text}\n")
                 except OSError:

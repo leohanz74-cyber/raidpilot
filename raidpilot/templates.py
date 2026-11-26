@@ -1,17 +1,19 @@
-"""Selbst erfasste Bildausschnitte (Knoepfe oder Truppen-Symbole)."""
-import re
+"""Event troop icons captured by the user."""
 import time
 
 import cv2
+import numpy as np
 
 from . import store
 
-FILE = "templates.json"
-KINDS = ("button", "troop", "event")
+FILE = "event_troops.json"
+# Size of the captured square, relative to the screen width
+CROP = 0.034
+THRESHOLD = 0.80
 
 
 def folder():
-    path = store.data_dir() / "templates"
+    path = store.data_dir() / "event_troops"
     path.mkdir(exist_ok=True)
     return path
 
@@ -20,53 +22,55 @@ def index() -> list:
     return store.load(FILE, [])
 
 
-def add(kind: str, name: str, frame, rect) -> dict:
-    """rect = (x0, y0, x1, y1) relativ zum Bild."""
-    if kind not in KINDS:
-        raise ValueError("Unbekannte Art")
+def add(frame, x: float, y: float) -> dict:
+    """x, y: relative position of the icon centre on the picture."""
     height, width = frame.shape[:2]
-    x0, y0, x1, y1 = (min(1.0, max(0.0, float(v))) for v in rect)
-    x0, x1 = sorted((int(x0 * width), int(x1 * width)))
-    y0, y1 = sorted((int(y0 * height), int(y1 * height)))
-    if x1 - x0 < 12 or y1 - y0 < 12:
-        raise ValueError("Der Ausschnitt ist zu klein.")
-    name = str(name).strip()[:30] or "Truppe"
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "vorlage"
-    filename = f"{kind}-{slug}-{int(time.time() * 1000)}.png"
-    ok, data = cv2.imencode(".png", frame[y0:y1, x0:x1])
+    half = int(CROP * width / 2)
+    cx = min(width - half, max(half, int(float(x) * width)))
+    cy = min(height - half, max(half, int(float(y) * height)))
+    crop = frame[cy - half:cy + half, cx - half:cx + half]
+    if crop.size == 0 or float(crop.std()) < 8:
+        raise ValueError("There is no icon at this position.")
+    filename = f"event-{int(time.time() * 1000)}.png"
+    ok, data = cv2.imencode(".png", crop)
     if not ok:
-        raise ValueError("Ausschnitt konnte nicht gespeichert werden.")
+        raise ValueError("The icon could not be saved.")
     (folder() / filename).write_bytes(data.tobytes())
-    entry = {"kind": kind, "name": name, "file": filename, "screen_width": width}
-    entries = index()
-    if kind == "button":
-        for old in [e for e in entries if e["kind"] == "button" and e["name"] == name]:
-            (folder() / old["file"]).unlink(missing_ok=True)
-            entries.remove(old)
-    entries.append(entry)
-    store.save(FILE, entries)
+    entry = {"file": filename, "screen_width": width}
+    store.save(FILE, index() + [entry])
     return entry
 
 
-def remove(filename: str) -> None:
-    entries = index()
-    for entry in [e for e in entries if e["file"] == filename]:
+def clear() -> None:
+    for entry in index():
         (folder() / entry["file"]).unlink(missing_ok=True)
-        entries.remove(entry)
-    store.save(FILE, entries)
+    store.save(FILE, [])
 
 
 def load_image(entry: dict, screen_width: int):
-    path = folder() / entry["file"]
     try:
-        import numpy as np
-
-        image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+        raw = (folder() / entry["file"]).read_bytes()
     except OSError:
         return None
+    image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         return None
     scale = screen_width / max(1, entry.get("screen_width", screen_width))
     if abs(scale - 1) > 0.01:
         image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     return image
+
+
+def matches(frame, icon, left: int, right: int) -> bool:
+    """Is the icon on this card? The card art may be drawn at another size than where it was captured."""
+    if icon is None:
+        return False
+    height = frame.shape[0]
+    card = frame[int(.82 * height):int(.99 * height), max(0, left):right]
+    for scale in (0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0):
+        resized = cv2.resize(icon, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if resized.shape[0] > card.shape[0] or resized.shape[1] > card.shape[1] or min(resized.shape[:2]) < 16:
+            continue
+        if cv2.minMaxLoc(cv2.matchTemplate(card, resized, cv2.TM_CCOEFF_NORMED))[1] >= THRESHOLD:
+            return True
+    return False

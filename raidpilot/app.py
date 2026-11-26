@@ -1,10 +1,10 @@
-"""Programmstart: Fenster oeffnen."""
+"""Program start: open the window."""
 import sys
 import traceback
 from pathlib import Path
 
 from . import store
-from .api import SIZES, Api
+from .api import SIZE, Api
 
 
 def ui_path() -> str:
@@ -17,7 +17,7 @@ def main() -> None:
         import webview
 
         api = Api()
-        width, height = SIZES["normal"]
+        width, height = SIZE
         window = webview.create_window(
             "RaidPilot", url=ui_path(), js_api=api, width=width, height=height,
             frameless=True, easy_drag=False, resizable=False, background_color="#0d111f",
@@ -27,10 +27,10 @@ def main() -> None:
         webview.start()
     except Exception:
         report = traceback.format_exc()
-        (store.data_dir() / "absturz.log").write_text(report, encoding="utf-8")
+        (store.data_dir() / "crash.log").write_text(report, encoding="utf-8")
         if sys.platform == "win32":
             import ctypes
 
             ctypes.windll.user32.MessageBoxW(
-                0, f"RaidPilot konnte nicht starten.\n\n{report[-900:]}", "RaidPilot", 0x10)
+                0, f"RaidPilot could not start.\n\n{report[-900:]}", "RaidPilot", 0x10)
         raise

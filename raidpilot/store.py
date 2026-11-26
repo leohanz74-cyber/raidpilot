@@ -1,4 +1,4 @@
-"""Datenordner und sicheres Lesen/Schreiben von JSON."""
+"""Data folder and safe reading and writing of JSON files."""
 import json
 import os
 import sys
@@ -29,9 +29,9 @@ def load(name: str, default):
         except FileNotFoundError:
             return default
         except (OSError, ValueError):
-            # Kaputte Datei aufheben statt sie stillschweigend zu ueberschreiben
+            # Keep a broken file instead of silently overwriting it
             try:
-                os.replace(path, path.with_suffix(".defekt"))
+                os.replace(path, path.with_suffix(".broken"))
             except OSError:
                 pass
             return default

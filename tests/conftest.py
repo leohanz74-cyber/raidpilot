@@ -3,7 +3,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def home(tmp_path, monkeypatch):
-    """Jeder Test bekommt einen eigenen Datenordner."""
+    """Every test gets its own data folder."""
     monkeypatch.setenv("RAIDPILOT_HOME", str(tmp_path))
     return tmp_path
 

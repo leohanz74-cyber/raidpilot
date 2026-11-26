@@ -1,4 +1,4 @@
-"""Optionale Meldungen an einen eigenen Discord-Webhook."""
+"""Optional status messages to your own Discord webhook."""
 import json
 import threading
 import urllib.request
@@ -19,7 +19,7 @@ def send(url: str, text: str, log=None, wait: bool = False):
             return True
         except OSError as exc:
             if log:
-                log(f"Discord-Meldung fehlgeschlagen: {exc}", "warn")
+                log(f"Discord message failed: {exc}", "warn")
             return False
 
     if wait:
@@ -30,7 +30,7 @@ def send(url: str, text: str, log=None, wait: bool = False):
 
 def short(number: int) -> str:
     if number >= 1_000_000:
-        return f"{number / 1_000_000:.1f} Mio"
+        return f"{number / 1_000_000:.1f}M"
     if number >= 1_000:
         return f"{number / 1_000:.0f}k"
     return str(number)
