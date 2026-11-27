@@ -543,7 +543,7 @@ class Bot:
         elif settings["walls"]:
             if self._wall_pause:
                 self._wall_pause -= 1
-            elif self._upgrade_walls(settings):
+            elif self._try_walls(settings):
                 home = self._go_home()
                 values = home.storage() or values
                 self._ensure_zoom()  # the camera moved to the walls
@@ -921,6 +921,18 @@ class Bot:
             self._tap(point, 0.8)
 
     # ---------- walls ----------
+    def _try_walls(self, settings) -> bool:
+        """A fault in the wall upgrade must not end the farming: close what is open and go on."""
+        try:
+            return self._upgrade_walls(settings)
+        except (Stop, Done, BotError, AdbError, MumuError):
+            raise
+        except Exception:
+            self.log("The wall upgrade failed, attacking goes on.\n" + traceback.format_exc(), "error")
+            self._wall_pause = WALL_PAUSE
+            self._close_builder_list()
+            return True
+
     def _upgrade_walls(self, settings) -> bool:
         """Builder list -> a wall line -> "Upgrade" (gold or elixir) -> "Confirm", wall after wall,
         until no wall can be paid any more. Gem offers are closed, never confirmed.
@@ -981,7 +993,7 @@ class Bot:
         shot = self._open_builder_list()
         if shot is None:
             return None
-        previous, unchanged = None, 0
+        previous, unchanged, column = None, 0, None
         seen, rewound = False, False
         for _ in range(2 * WALL_SCROLLS):
             entries = shot.wall_entries()
@@ -993,7 +1005,9 @@ class Bot:
             if not panel:
                 break
             x = panel[0] / shot.width
-            picture = shot.crop((x - 0.12, 0.15, x + 0.12, 0.85))[0][::6, ::6].astype(np.int16)
+            if column is None:  # the same cut-out for the whole search: the found position moves a little
+                column = (min(x, 0.88) - 0.12, 0.15, min(x, 0.88) + 0.12, 0.85)
+            picture = shot.crop(column)[0][::6, ::6].astype(np.int16)
             if previous is not None and np.abs(picture - previous).mean() < 1.5:
                 unchanged += 1
             else:

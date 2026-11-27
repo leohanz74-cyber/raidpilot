@@ -3,6 +3,7 @@ import pytest
 from raidpilot import settings
 from raidpilot.bot import Bot
 from raidpilot.logbook import Log
+from raidpilot.screen import Screen
 from raidpilot.stats import Stats
 
 from .fakegame import FakeGame, FakeMumu
@@ -415,3 +416,33 @@ def test_offline_device_is_reported(ocr):
     game.online = ""
     bot, _, log = run_bot(game, ocr, device="127.0.0.1:9999")
     assert "not online" in bot.last_error and not game.taps
+
+
+def test_walls_survive_a_list_title_that_is_not_always_found_at_the_same_place(ocr, monkeypatch):
+    # On the real game the position taken for the list moves between two looks (seen: 0.86 and 0.90)
+    real, looks = Screen.upgrade_panel, []
+
+    def wandering(self):
+        found = real(self)
+        looks.append(found)
+        return found and (found[0] + (60 if len(looks) % 2 else 0), found[1])
+
+    monkeypatch.setattr(Screen, "upgrade_panel", wandering)
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 9_000_000))
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["walls"] == 5 and stats.session["attacks"] == 1, log
+    assert not any("The wall upgrade failed" in line for line in log), log
+
+
+def test_a_fault_in_the_wall_upgrade_does_not_stop_the_bot(ocr, monkeypatch):
+    def broken(self, money, skipped=()):
+        self._open_builder_list()
+        raise ValueError("boom")
+
+    monkeypatch.setattr(Bot, "_find_wall_entry", broken)
+    game = FakeGame(loots=[(900_000, 900_000, 0)], storage=(17_000_000, 9_000_000))
+    bot, stats, log = run_bot(game, ocr, walls=True, spell="none")
+    assert not bot.last_error and stats.session["attacks"] == 1 and game.state == "home", log
+    assert any(line.startswith("The wall upgrade failed, attacking goes on.") and "boom" in line
+               for line in log), log
+
